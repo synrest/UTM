@@ -30,6 +30,7 @@ enum UTMQuitPolicy: Int {
     
     @Setting("KeepRunningAfterLastWindowClosed") private var isKeepRunningAfterLastWindowClosed: Bool = false
     @Setting("HideDockIcon") private var isDockIconHidden: Bool = false
+    @Setting("ShowMenuIcon") private var isMenuIconShown: Bool = false
     @Setting("NoQuitConfirmation") private var isNoQuitConfirmation: Bool = false
     @Setting("QuitRunningVirtualMachinesPolicy") private var quitPolicy: Int = UTMQuitPolicy.saveState.rawValue
 
@@ -39,6 +40,16 @@ enum UTMQuitPolicy: Int {
     private var arePowerDownCandidatesStopped = false
     private var isPowerDownTerminationFinished = false
     private var applicationStartupTask: Task<Void, Never>?
+    private let interactiveWindows = NSHashTable<NSWindow>.weakObjects()
+    private let homeWindows = NSHashTable<NSWindow>.weakObjects()
+
+    private var shouldUseAccessoryMode: Bool {
+        if #available(macOS 13, *) {
+            return isDockIconHidden && isMenuIconShown
+        } else {
+            return false
+        }
+    }
     
     private var runningVirtualMachines: [VMData] {
         guard let vmList = data?.vmWindows.keys else {
@@ -73,7 +84,79 @@ enum UTMQuitPolicy: Int {
     }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        !isKeepRunningAfterLastWindowClosed && runningVirtualMachines.isEmpty
+        if shouldUseAccessoryMode {
+            returnToAccessoryModeIfNeeded()
+            return false
+        }
+        return !isKeepRunningAfterLastWindowClosed && runningVirtualMachines.isEmpty
+    }
+
+    func registerInteractiveWindow(_ window: NSWindow, isHomeWindow: Bool = false) {
+        interactiveWindows.add(window)
+        if isHomeWindow {
+            homeWindows.add(window)
+            suppressHomeWindowIfNeeded(window)
+        }
+    }
+
+    private func suppressHomeWindowIfNeeded(_ window: NSWindow) {
+        guard #unavailable(macOS 15), shouldUseAccessoryMode, NSApp.activationPolicy() == .accessory else {
+            return
+        }
+        window.orderOut(nil)
+    }
+
+    private func returnToAccessoryModeIfNeeded(excluding closingWindow: NSWindow? = nil) {
+        guard shouldUseAccessoryMode, NSApp.activationPolicy() == .regular else {
+            return
+        }
+        let hasVisibleWindow = interactiveWindows.allObjects.contains { window in
+            window !== closingWindow && window.isVisible
+        }
+        let hasVisibleVmWindow = data?.vmWindows.values.contains { session in
+            guard let window = (session as? VMDisplayWindowController)?.window else {
+                return false
+            }
+            return window !== closingWindow && window.isVisible
+        } ?? false
+        guard !hasVisibleWindow && !hasVisibleVmWindow else {
+            return
+        }
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    @objc private func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else {
+            return
+        }
+        if homeWindows.contains(window) {
+            suppressHomeWindowIfNeeded(window)
+        }
+        if NSApp.activationPolicy() == .regular {
+            interactiveWindows.add(window)
+        }
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else {
+            return
+        }
+        let isVmWindow = data?.vmWindows.values.contains { session in
+            (session as? VMDisplayWindowController)?.window === window
+        } ?? false
+        guard interactiveWindows.contains(window) || isVmWindow else {
+            return
+        }
+        interactiveWindows.remove(window)
+        homeWindows.remove(window)
+        returnToAccessoryModeIfNeeded(excluding: window)
+    }
+
+    func menuBarExtraVisibilityDidChange(_ isVisible: Bool) {
+        guard !isVisible, NSApp.activationPolicy() == .accessory else {
+            return
+        }
+        NSApp.setActivationPolicy(.regular)
     }
     
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -274,10 +357,15 @@ enum UTMQuitPolicy: Int {
         }
     }
     
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        if isDockIconHidden {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        if shouldUseAccessoryMode {
             NSApp.setActivationPolicy(.accessory)
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(windowDidBecomeKey), name: NSWindow.didBecomeKeyNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(windowWillClose), name: NSWindow.willCloseNotification, object: nil)
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.scriptingDelegate = self
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(workspaceDidMount), name: NSWorkspace.didMountNotification, object: nil)
         applicationStartupTask = Task {

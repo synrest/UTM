@@ -27,7 +27,15 @@ struct UTMMenuBarExtraScene: Scene {
     var body: some Scene {
         MenuBarExtra(isInserted: $isMenuIconShown) {
             Button("Show UTM") {
+                if NSApp.activationPolicy() == .accessory && !NSApp.setActivationPolicy(.regular) {
+                    return
+                }
                 openWindow(id: "home")
+                if #available(macOS 14, *) {
+                    NSApp.activate()
+                } else {
+                    NSApp.activate(ignoringOtherApps: true)
+                }
             }.keyboardShortcut("0")
             .help("Show the main window.")
             Toggle("Hide dock icon on next launch", isOn: $isDockIconHidden)

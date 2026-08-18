@@ -20,6 +20,8 @@ import AppIntents
 struct UTMApp: App {
     let data: UTMData
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate: AppDelegate
+    @AppStorage("HideDockIcon") private var isDockIconHidden: Bool = false
+    @AppStorage("ShowMenuIcon") private var isMenuIconShown: Bool = false
 
     init() {
         let data = UTMData()
@@ -60,25 +62,103 @@ struct UTMApp: App {
         Window("UTM Library", id: "home") {
             homeWindow
                 .navigationTitle("UTM")
+                .background(WindowReader { window in
+                    appDelegate.registerInteractiveWindow(window, isHomeWindow: true)
+                })
         }.commands {
             VMCommands()
         }
         Settings {
-            SettingsView()
+            SettingsView().background(WindowReader { window in
+                appDelegate.registerInteractiveWindow(window)
+            })
         }
         UTMMenuBarExtraScene(data: data)
+            .onChange(of: isMenuIconShown) { isVisible in
+                appDelegate.menuBarExtraVisibilityDidChange(isVisible)
+            }
         Window("UTM Server", id: "server") {
-            UTMServerView().environmentObject(data.remoteServer.state)
+            UTMServerView()
+                .environmentObject(data.remoteServer.state)
+                .background(WindowReader { window in
+                    appDelegate.registerInteractiveWindow(window)
+                })
+        }
+    }
+
+    @available(macOS 15, *)
+    @SceneBuilder
+    var newestBody: some Scene {
+        Window("UTM Library", id: "home") {
+            homeWindow
+                .navigationTitle("UTM")
+                .background(WindowReader { window in
+                    appDelegate.registerInteractiveWindow(window, isHomeWindow: true)
+                })
+        }.commands {
+            VMCommands()
+        }
+        .defaultLaunchBehavior(isDockIconHidden && isMenuIconShown ? .suppressed : .automatic)
+        .restorationBehavior(isDockIconHidden && isMenuIconShown ? .disabled : .automatic)
+        Settings {
+            SettingsView().background(WindowReader { window in
+                appDelegate.registerInteractiveWindow(window)
+            })
+        }
+        UTMMenuBarExtraScene(data: data)
+            .onChange(of: isMenuIconShown) { isVisible in
+                appDelegate.menuBarExtraVisibilityDidChange(isVisible)
+            }
+        Window("UTM Server", id: "server") {
+            UTMServerView()
+                .environmentObject(data.remoteServer.state)
+                .background(WindowReader { window in
+                    appDelegate.registerInteractiveWindow(window)
+                })
+        }
+    }
+
+    @available(macOS 13, *)
+    var modernBody: some Scene {
+        if #available(macOS 15, *) {
+            return newestBody
+        } else {
+            return newBody
         }
     }
     
     // HACK: SwiftUI doesn't provide if-statement support in SceneBuilder
     var body: some Scene {
         if #available(macOS 13, *) {
-            return newBody
+            return modernBody
         } else {
             return oldBody
         }
     }
     
+}
+
+private struct WindowReader: NSViewRepresentable {
+    let onWindowChange: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> WindowReaderView {
+        let view = WindowReaderView()
+        view.onWindowChange = onWindowChange
+        return view
+    }
+
+    func updateNSView(_ nsView: WindowReaderView, context: Context) {
+        nsView.onWindowChange = onWindowChange
+    }
+}
+
+private class WindowReaderView: NSView {
+    var onWindowChange: ((NSWindow) -> Void)?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if let newWindow = newWindow {
+            onWindowChange?(newWindow)
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
 }
