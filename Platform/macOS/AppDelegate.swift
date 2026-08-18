@@ -35,10 +35,11 @@ enum UTMQuitPolicy: Int {
     @Setting("QuitRunningVirtualMachinesPolicy") private var quitPolicy: Int = UTMQuitPolicy.saveState.rawValue
 
     private var powerDownStateObserver: AnyCancellable?
+    private var powerDownRequestTask: Task<Void, Never>?
     private var powerDownTimeoutTask: Task<Void, Never>?
+    private var powerDownAttemptID: UUID?
     private var isPowerDownRequestComplete = false
     private var arePowerDownCandidatesStopped = false
-    private var isPowerDownTerminationFinished = false
     private var applicationStartupTask: Task<Void, Never>?
     private let interactiveWindows = NSHashTable<NSWindow>.weakObjects()
     private let homeWindows = NSHashTable<NSWindow>.weakObjects()
@@ -185,9 +186,11 @@ enum UTMQuitPolicy: Int {
 
     private func handleTerminateAfterPowerDown(candidates: some Sequence<VMData>) {
         let candidates = Array(candidates)
+        cancelPowerDownAttempt()
+        let attemptID = UUID()
+        powerDownAttemptID = attemptID
         isPowerDownRequestComplete = false
         arePowerDownCandidatesStopped = false
-        isPowerDownTerminationFinished = false
 
         let stoppedPublishers = candidates.map { vm in
             vm.$state
@@ -199,34 +202,62 @@ enum UTMQuitPolicy: Int {
         powerDownStateObserver = Publishers.MergeMany(stoppedPublishers)
             .collect(candidates.count)
             .sink { [weak self] _ in
-                guard let self = self else {
+                guard let self = self, self.powerDownAttemptID == attemptID else {
                     return
                 }
                 self.arePowerDownCandidatesStopped = true
-                self.finishPowerDownTerminationIfReady()
+                self.finishPowerDownTerminationIfReady(attemptID: attemptID)
             }
 
         powerDownTimeoutTask = Task {
             do {
                 try await Task.sleep(nanoseconds: 45 * NSEC_PER_SEC)
-                failPowerDownTermination("Timed out after 45 seconds waiting for running VMs to stop.")
+                let message = NSLocalizedString("Timed out after 45 seconds waiting for running VMs to stop.", comment: "AppDelegate")
+                failPowerDownTermination(attemptID: attemptID, message: message)
             } catch {
                 // Timeout was cancelled because termination already completed.
             }
         }
 
-        Task {
+        powerDownRequestTask = Task {
             let errors = await withTaskGroup(of: String?.self, returning: [String].self) { group in
                 for vm in candidates {
                     group.addTask {
                         guard let wrapped = await vm.wrapped else {
-                            return "A running VM became unavailable before requesting power down."
+                            return NSLocalizedString("A running VM became unavailable before requesting power down.", comment: "AppDelegate")
                         }
                         do {
-                            try await wrapped.stop(usingMethod: .request)
+                            if await wrapped.state == .stopped {
+                                return nil
+                            }
+                            if await wrapped.state == .paused {
+                                do {
+                                    try await wrapped.resume()
+                                } catch {
+                                    if await wrapped.state == .stopped {
+                                        return nil
+                                    }
+                                    throw error
+                                }
+                                if await wrapped.state == .stopped {
+                                    return nil
+                                }
+                            }
+                            if await wrapped.state == .stopped {
+                                return nil
+                            }
+                            do {
+                                try await wrapped.stop(usingMethod: .request)
+                            } catch {
+                                if await wrapped.state == .stopped {
+                                    return nil
+                                }
+                                throw error
+                            }
                             return nil
                         } catch {
-                            return "Failed to request power down for \(await vm.detailsTitleLabel): \(error.localizedDescription)"
+                            let format = NSLocalizedString("Failed to request power down for %@: %@", comment: "AppDelegate")
+                            return String(format: format, await vm.detailsTitleLabel, error.localizedDescription)
                         }
                     }
                 }
@@ -238,36 +269,45 @@ enum UTMQuitPolicy: Int {
                 }
                 return errors
             }
+            guard powerDownAttemptID == attemptID else {
+                return
+            }
             if errors.isEmpty {
                 isPowerDownRequestComplete = true
-                finishPowerDownTerminationIfReady()
+                finishPowerDownTerminationIfReady(attemptID: attemptID)
             } else {
-                failPowerDownTermination(errors.joined(separator: "\n"))
+                failPowerDownTermination(attemptID: attemptID, message: errors.joined(separator: "\n"))
             }
         }
     }
 
-    private func finishPowerDownTerminationIfReady() {
-        guard isPowerDownRequestComplete && arePowerDownCandidatesStopped && !isPowerDownTerminationFinished else {
+    private func finishPowerDownTerminationIfReady(attemptID: UUID) {
+        guard powerDownAttemptID == attemptID && isPowerDownRequestComplete && arePowerDownCandidatesStopped else {
             return
         }
-        isPowerDownTerminationFinished = true
-        powerDownTimeoutTask?.cancel()
-        powerDownTimeoutTask = nil
-        powerDownStateObserver = nil
+        cancelPowerDownAttempt()
         NSApplication.shared.reply(toApplicationShouldTerminate: true)
     }
 
-    private func failPowerDownTermination(_ message: String) {
-        guard !isPowerDownTerminationFinished else {
+    private func failPowerDownTermination(attemptID: UUID, message: String) {
+        guard powerDownAttemptID == attemptID else {
             return
         }
-        isPowerDownTerminationFinished = true
+        cancelPowerDownAttempt()
+        let format = NSLocalizedString("Graceful quit cancelled: %@", comment: "AppDelegate")
+        let visibleMessage = String(format: format, message)
+        logger.error("\(visibleMessage)")
+        data?.showErrorAlert(message: visibleMessage)
+        NSApplication.shared.reply(toApplicationShouldTerminate: false)
+    }
+
+    private func cancelPowerDownAttempt() {
+        powerDownAttemptID = nil
+        powerDownRequestTask?.cancel()
+        powerDownRequestTask = nil
         powerDownTimeoutTask?.cancel()
         powerDownTimeoutTask = nil
         powerDownStateObserver = nil
-        logger.error("Graceful quit cancelled: \(message)")
-        NSApplication.shared.reply(toApplicationShouldTerminate: false)
     }
     
     private func handleTerminateAfterSaving(candidates: some Sequence<VMData>, sender: NSApplication) {
