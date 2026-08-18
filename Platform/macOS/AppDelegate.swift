@@ -14,6 +14,13 @@
 // limitations under the License.
 //
 
+import Combine
+
+enum UTMQuitPolicy: Int {
+    case saveState = 0
+    case requestPowerDown = 1
+}
+
 @MainActor class AppDelegate: NSObject, NSApplicationDelegate {
     private enum TerminateError: Error {
         case wrapped(originalError: any Error, window: NSWindow?)
@@ -24,6 +31,13 @@
     @Setting("KeepRunningAfterLastWindowClosed") private var isKeepRunningAfterLastWindowClosed: Bool = false
     @Setting("HideDockIcon") private var isDockIconHidden: Bool = false
     @Setting("NoQuitConfirmation") private var isNoQuitConfirmation: Bool = false
+    @Setting("QuitRunningVirtualMachinesPolicy") private var quitPolicy: Int = UTMQuitPolicy.saveState.rawValue
+
+    private var powerDownStateObserver: AnyCancellable?
+    private var powerDownTimeoutTask: Task<Void, Never>?
+    private var isPowerDownRequestComplete = false
+    private var arePowerDownCandidatesStopped = false
+    private var isPowerDownTerminationFinished = false
     
     private var runningVirtualMachines: [VMData] {
         guard let vmList = data?.vmWindows.keys else {
@@ -72,13 +86,104 @@
         let vmList = data.vmWindows.keys
         let runningList = runningVirtualMachines
         if !runningList.isEmpty { // There is at least 1 running VM
-            handleTerminateAfterSaving(candidates: runningList, sender: sender)
+            if UTMQuitPolicy(rawValue: quitPolicy) == .requestPowerDown {
+                handleTerminateAfterPowerDown(candidates: runningList)
+            } else {
+                handleTerminateAfterSaving(candidates: runningList, sender: sender)
+            }
             return .terminateLater
         } else if vmList.allSatisfy({ !$0.isLoaded || $0.wrapped?.state == .stopped }) { // All VMs are stopped or suspended
             return .terminateNow
         } else { // There could be some VMs in other states (starting, pausing, etc.)
             return .terminateCancel
         }
+    }
+
+    private func handleTerminateAfterPowerDown(candidates: some Sequence<VMData>) {
+        let candidates = Array(candidates)
+        isPowerDownRequestComplete = false
+        arePowerDownCandidatesStopped = false
+        isPowerDownTerminationFinished = false
+
+        let stoppedPublishers = candidates.map { vm in
+            vm.$state
+                .filter { $0 == .stopped }
+                .prefix(1)
+                .map { _ in () }
+                .eraseToAnyPublisher()
+        }
+        powerDownStateObserver = Publishers.MergeMany(stoppedPublishers)
+            .collect(candidates.count)
+            .sink { [weak self] _ in
+                guard let self = self else {
+                    return
+                }
+                self.arePowerDownCandidatesStopped = true
+                self.finishPowerDownTerminationIfReady()
+            }
+
+        powerDownTimeoutTask = Task {
+            do {
+                try await Task.sleep(nanoseconds: 45 * NSEC_PER_SEC)
+                failPowerDownTermination("Timed out after 45 seconds waiting for running VMs to stop.")
+            } catch {
+                // Timeout was cancelled because termination already completed.
+            }
+        }
+
+        Task {
+            let errors = await withTaskGroup(of: String?.self, returning: [String].self) { group in
+                for vm in candidates {
+                    group.addTask {
+                        guard let wrapped = await vm.wrapped else {
+                            return "A running VM became unavailable before requesting power down."
+                        }
+                        do {
+                            try await wrapped.stop(usingMethod: .request)
+                            return nil
+                        } catch {
+                            return "Failed to request power down for \(await vm.detailsTitleLabel): \(error.localizedDescription)"
+                        }
+                    }
+                }
+                var errors = [String]()
+                for await error in group {
+                    if let error = error {
+                        errors.append(error)
+                    }
+                }
+                return errors
+            }
+            if errors.isEmpty {
+                isPowerDownRequestComplete = true
+                finishPowerDownTerminationIfReady()
+            } else {
+                failPowerDownTermination(errors.joined(separator: "\n"))
+            }
+        }
+    }
+
+    private func finishPowerDownTerminationIfReady() {
+        guard isPowerDownRequestComplete && arePowerDownCandidatesStopped && !isPowerDownTerminationFinished else {
+            return
+        }
+        isPowerDownTerminationFinished = true
+        powerDownTimeoutTask?.cancel()
+        powerDownTimeoutTask = nil
+        powerDownStateObserver = nil
+        NSApplication.shared.reply(toApplicationShouldTerminate: true)
+    }
+
+    private func failPowerDownTermination(_ message: String) {
+        guard !isPowerDownTerminationFinished else {
+            return
+        }
+        isPowerDownTerminationFinished = true
+        powerDownTimeoutTask?.cancel()
+        powerDownTimeoutTask = nil
+        powerDownStateObserver = nil
+        logger.error("Graceful quit cancelled: \(message)")
+        NSApplication.shared.reply(toApplicationShouldTerminate: false)
     }
     
     private func handleTerminateAfterSaving(candidates: some Sequence<VMData>, sender: NSApplication) {
