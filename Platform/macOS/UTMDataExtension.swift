@@ -115,8 +115,10 @@ extension UTMData {
         do {
             if wrapped.state == .paused {
                 try await wrapped.resume()
+                vm.state = wrapped.state
             } else if wrapped.state == .stopped {
                 try await wrapped.start(options: options)
+                vm.state = wrapped.state
             } else {
                 throw UTMDataError.virtualMachineUnavailable
             }
