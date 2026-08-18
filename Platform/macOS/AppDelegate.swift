@@ -38,6 +38,7 @@ enum UTMQuitPolicy: Int {
     private var isPowerDownRequestComplete = false
     private var arePowerDownCandidatesStopped = false
     private var isPowerDownTerminationFinished = false
+    private var applicationStartupTask: Task<Void, Never>?
     
     private var runningVirtualMachines: [VMData] {
         guard let vmList = data?.vmWindows.keys else {
@@ -276,6 +277,25 @@ enum UTMQuitPolicy: Int {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if isDockIconHidden {
             NSApp.setActivationPolicy(.accessory)
+        }
+        NSApp.scriptingDelegate = self
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(workspaceDidMount), name: NSWorkspace.didMountNotification, object: nil)
+        applicationStartupTask = Task {
+            guard let data = data else {
+                return
+            }
+            await data.listRefresh()
+            await data.autoStartVirtualMachines()
+        }
+    }
+
+    func waitForApplicationStartup() async {
+        await applicationStartupTask?.value
+    }
+
+    @objc private func workspaceDidMount(_ notification: Notification) {
+        Task {
+            await data?.retryPendingAutoStartVirtualMachines()
         }
     }
     

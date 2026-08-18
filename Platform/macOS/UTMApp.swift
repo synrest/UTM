@@ -24,6 +24,7 @@ struct UTMApp: App {
     init() {
         let data = UTMData()
         self.data = data
+        appDelegate.data = data
         if #available(macOS 13, *) {
             AppDependencyManager.shared.add(dependency: data)
         }
@@ -31,19 +32,12 @@ struct UTMApp: App {
 
     @ViewBuilder
     var homeWindow: some View {
-        ContentView().environmentObject(data)
-            .onAppear {
-                appDelegate.data = data
-                NSApp.scriptingDelegate = appDelegate
-            }
+        ContentView {
+            await appDelegate.waitForApplicationStartup()
+        }.environmentObject(data)
             .onReceive(.vmSessionError) { notification in
                 if let message = notification.userInfo?["Message"] as? String {
                     data.showErrorAlert(message: message)
-                }
-            }
-            .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in
-                Task {
-                    await data.retryPendingAutoStartVirtualMachines()
                 }
             }
     }

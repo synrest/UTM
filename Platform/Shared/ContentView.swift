@@ -37,6 +37,13 @@ struct ContentView: View {
     @State private var openSheetPresented = false
     @Environment(\.openURL) var openURL
     @AppStorage("ServerAutostart") private var isServerAutostart: Bool = false
+#if os(macOS)
+    private let waitForApplicationStartup: () async -> Void
+
+    init(waitForApplicationStartup: @escaping () async -> Void = {}) {
+        self.waitForApplicationStartup = waitForApplicationStartup
+    }
+#endif
 
     var body: some View {
         VMNavigationListView()
@@ -84,9 +91,10 @@ struct ContentView: View {
         .onDrop(of: [.fileURL], delegate: self)
         .onAppear {
             Task {
-                await data.listRefresh()
                 #if os(macOS)
-                await data.autoStartVirtualMachines()
+                await waitForApplicationStartup()
+                #else
+                await data.listRefresh()
                 #endif
                 await releaseHelper.fetchReleaseNotes()
                 if #available(iOS 17, macOS 14, *) {
