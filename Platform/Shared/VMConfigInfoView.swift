@@ -218,9 +218,23 @@ struct VMConfigInfoView: View {
 #if os(macOS)
 private struct AutoStartToggleView: View {
     @ObservedObject var registryEntry: UTMRegistryEntry
+    @State private var errorMessage: String?
 
     var body: some View {
-        Toggle("Start automatically when UTM launches", isOn: $registryEntry.autoStart)
+        Toggle("Start automatically when UTM launches", isOn: Binding(get: {
+            registryEntry.autoStart
+        }, set: updateAutoStart))
+        .alert(item: $errorMessage) { message in
+            Alert(title: Text(message))
+        }
+    }
+
+    private func updateAutoStart(_ shouldEnable: Bool) {
+        if !shouldEnable || UTMRegistry.shared.canEnableAutoStart(for: registryEntry) {
+            registryEntry.autoStart = shouldEnable
+        } else {
+            errorMessage = String.localizedStringWithFormat(NSLocalizedString("UTM can automatically start up to %lld virtual machines.", comment: "VMConfigInfoView"), maxAutoStartVirtualMachines)
+        }
     }
 }
 #endif

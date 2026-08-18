@@ -105,6 +105,10 @@ class UTMRegistry: NSObject {
     func entry(for uuidString: String) -> UTMRegistryEntry? {
         return entries[uuidString]
     }
+
+    @MainActor func canEnableAutoStart(for entry: UTMRegistryEntry) -> Bool {
+        entry.autoStart || entries.values.lazy.filter({ $0.autoStart }).count < maxAutoStartVirtualMachines
+    }
     
     /// Commit the entry to persistent storage
     /// This runs in a background queue.

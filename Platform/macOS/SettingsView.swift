@@ -15,6 +15,7 @@
 //
 
 import SwiftUI
+import ServiceManagement
 
 @available(macOS 11, *)
 struct SettingsView: View {
@@ -171,6 +172,7 @@ struct ApplicationSettingsView: View {
                 Text("Keep UTM running after last window is closed and all VMs are shut down")
             })
             if #available(macOS 13, *) {
+                LaunchAtLoginSettingsToggle()
                 Toggle(isOn: $isDockIconHidden.inverted, label: {
                     Text("Show dock icon")
                 }).onChange(of: isDockIconHidden) { newValue in
@@ -210,6 +212,55 @@ struct ApplicationSettingsView: View {
                 }
             }
         }
+    }
+}
+
+@available(macOS 13, *)
+private struct LaunchAtLoginSettingsToggle: View {
+    @State private var isEnabled: Bool
+    @State private var errorMessage: String?
+
+    init() {
+        _isEnabled = State(initialValue: SMAppService.mainApp.status == .enabled)
+    }
+
+    var body: some View {
+        Toggle("Launch UTM at login", isOn: Binding(get: {
+            isEnabled
+        }, set: updateRegistration))
+        .onAppear(perform: refreshStatus)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshStatus()
+        }
+        .alert(item: $errorMessage) { message in
+            Alert(title: Text("Unable to update login item"), message: Text(message))
+        }
+    }
+
+    private func updateRegistration(_ shouldEnable: Bool) {
+        errorMessage = nil
+        do {
+            if shouldEnable {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        let status = SMAppService.mainApp.status
+        isEnabled = status == .enabled
+        if shouldEnable && status == .requiresApproval {
+            errorMessage = NSLocalizedString("Allow UTM in Login Items in System Settings to launch it automatically at login.", comment: "SettingsView")
+        } else if shouldEnable && status != .enabled && errorMessage == nil {
+            errorMessage = NSLocalizedString("UTM could not be enabled as a login item.", comment: "SettingsView")
+        } else if !shouldEnable && status == .enabled && errorMessage == nil {
+            errorMessage = NSLocalizedString("UTM could not be disabled as a login item.", comment: "SettingsView")
+        }
+    }
+
+    private func refreshStatus() {
+        isEnabled = SMAppService.mainApp.status == .enabled
     }
 }
 

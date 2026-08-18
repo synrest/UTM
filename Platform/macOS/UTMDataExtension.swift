@@ -25,7 +25,12 @@ extension UTMData {
         }
         didPerformAutoStart = true
         logger.debug("Beginning VM autostart pass.")
-        for vm in virtualMachines where vm.isLoaded && vm.registryEntry?.autoStart == true {
+        let autoStartVMs = virtualMachines.filter({ $0.isLoaded && $0.registryEntry?.autoStart == true })
+        if autoStartVMs.count > maxAutoStartVirtualMachines {
+            logger.warning("\(autoStartVMs.count) VMs are marked for autostart; only \(maxAutoStartVirtualMachines) will be considered.")
+        }
+        // Consider the first marked VMs in current library order up to the safety cap.
+        for vm in autoStartVMs.prefix(maxAutoStartVirtualMachines) {
             guard vm.state == .stopped else {
                 logger.debug("Skipping autostart for '\(vm.detailsTitleLabel)' because it is already running.")
                 continue

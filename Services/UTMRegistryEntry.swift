@@ -17,6 +17,8 @@
 import Foundation
 import Combine
 
+let maxAutoStartVirtualMachines = 10
+
 @objc class UTMRegistryEntry: NSObject, Codable, ObservableObject {
     /// Empty registry entry used only as a workaround for object initialization
     static let empty = UTMRegistryEntry(uuid: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!, name: "", path: "")
