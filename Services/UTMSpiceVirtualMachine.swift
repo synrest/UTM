@@ -86,7 +86,7 @@ extension UTMSpiceVirtualMachine {
 // MARK: - External drives
 extension UTMSpiceVirtualMachine {
     @MainActor func externalImageURL(for drive: UTMQemuConfigurationDrive) -> URL? {
-        registryEntry.externalDrives[drive.id]?.url
+        registryEntry.externalDrives[drive.id]?.availableURL
     }
 }
 
@@ -152,7 +152,7 @@ extension UTMSpiceVirtualMachine {
         for drive in configDrives {
             if drive.isExternal, let url = drive.imageURL {
                 try await changeMedium(drive, to: url)
-            } else if drive.isExternal {
+            } else if drive.isExternal && registryEntry.externalDrives[drive.id]?.isAvailable != false {
                 try await eject(drive)
             }
         }
@@ -172,7 +172,7 @@ extension UTMSpiceVirtualMachine {
         for i in config.drives.indices {
             let id = config.drives[i].id
             if config.drives[i].isExternal {
-                config.drives[i].imageURL = registryEntry.externalDrives[id]?.url
+                config.drives[i].imageURL = externalImageURL(for: config.drives[i])
             }
         }
     }

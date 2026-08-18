@@ -36,6 +36,7 @@ struct VMConfigDriveDetailsView: View {
     
     @Binding var config: UTMQemuConfigurationDrive
     @Binding var requestDriveDelete: UTMQemuConfigurationDrive?
+    var onClearExternalDrive: () -> Void = {}
     
     @EnvironmentObject private var data: UTMData
     @State private var isImporterPresented: Bool = false
@@ -62,7 +63,7 @@ struct VMConfigDriveDetailsView: View {
                     }
                 }
             } else {
-                FileBrowseField(url: $config.imageURL, isFileImporterPresented: $isImporterPresented)
+                FileBrowseField(url: $config.imageURL, isFileImporterPresented: $isImporterPresented, onClear: onClearExternalDrive)
                 .globalFileImporter(isPresented: $isImporterPresented, allowedContentTypes: [.item]) { result in
                     data.busyWorkAsync {
                         let url = try result.get()

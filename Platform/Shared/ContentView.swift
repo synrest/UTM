@@ -85,6 +85,9 @@ struct ContentView: View {
         .onAppear {
             Task {
                 await data.listRefresh()
+                #if os(macOS)
+                await data.autoStartVirtualMachines()
+                #endif
                 await releaseHelper.fetchReleaseNotes()
                 if #available(iOS 17, macOS 14, *) {
                     if !releaseHelper.isReleaseNotesShown {

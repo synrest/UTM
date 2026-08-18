@@ -28,9 +28,9 @@ struct VMSettingsView<Config: UTMConfiguration>: View {
         NavigationView {
             List {
                 if config is UTMQemuConfiguration {
-                    VMQEMUSettingsView(config: config as! UTMQemuConfiguration)
+                    VMQEMUSettingsView(config: config as! UTMQemuConfiguration, registryEntry: vm.registryEntry)
                 } else if config is UTMAppleConfiguration {
-                    VMAppleSettingsView(config: config as! UTMAppleConfiguration)
+                    VMAppleSettingsView(config: config as! UTMAppleConfiguration, registryEntry: vm.registryEntry)
                 }
             }.listStyle(.sidebar)
             Text("")

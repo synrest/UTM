@@ -40,7 +40,12 @@ struct UTMApp: App {
                 if let message = notification.userInfo?["Message"] as? String {
                     data.showErrorAlert(message: message)
                 }
-            }  
+            }
+            .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in
+                Task {
+                    await data.retryPendingAutoStartVirtualMachines()
+                }
+            }
     }
     
     @SceneBuilder

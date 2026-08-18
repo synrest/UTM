@@ -18,14 +18,20 @@ import SwiftUI
 
 struct VMQEMUSettingsView: View {
     @ObservedObject var config: UTMQemuConfiguration
+    let registryEntry: UTMRegistryEntry?
     @EnvironmentObject private var data: UTMData
 
     @State private var infoActive: Bool = true
     @State private var isResetConfig: Bool = false
     @State private var isNewDriveShown: Bool = false
+
+    init(config: UTMQemuConfiguration, registryEntry: UTMRegistryEntry? = nil) {
+        self.config = config
+        self.registryEntry = registryEntry
+    }
     
     var body: some View {
-        NavigationLink(destination: VMConfigInfoView(config: $config.information).scrollable().settingsToolbar(), isActive: $infoActive) {
+        NavigationLink(destination: VMConfigInfoView(config: $config.information, registryEntry: registryEntry).scrollable().settingsToolbar(), isActive: $infoActive) {
             Label("Information", systemImage: "info.circle")
         }
         NavigationLink {
@@ -169,7 +175,7 @@ struct VMQEMUSettingsView: View {
             VMSettingsAddDeviceMenuView(config: config)
         }
         Section(header: Text("Drives")) {
-            VMDrivesSettingsView(drives: $config.drives, template: UTMQemuConfigurationDrive(forArchitecture: config.system.architecture, target: config.system.target))
+            VMDrivesSettingsView(drives: $config.drives, template: UTMQemuConfigurationDrive(forArchitecture: config.system.architecture, target: config.system.target), registryEntry: registryEntry)
         }
     }
 

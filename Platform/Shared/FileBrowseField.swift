@@ -21,13 +21,15 @@ struct FileBrowseField: View {
     @Binding var url: URL?
     @Binding var isFileImporterPresented: Bool
     let hasClearButton: Bool
+    let onClear: (() -> Void)?
     let onBrowse: () -> Void
     
-    init(_ titleKey: LocalizedStringKey = "Path", url: Binding<URL?>, isFileImporterPresented: Binding<Bool>, hasClearButton: Bool = true, onBrowse: @escaping () -> Void = {}) {
+    init(_ titleKey: LocalizedStringKey = "Path", url: Binding<URL?>, isFileImporterPresented: Binding<Bool>, hasClearButton: Bool = true, onClear: (() -> Void)? = nil, onBrowse: @escaping () -> Void = {}) {
         self.titleKey = titleKey
         self._url = url
         self._isFileImporterPresented = isFileImporterPresented
         self.hasClearButton = hasClearButton
+        self.onClear = onClear
         self.onBrowse = onBrowse
     }
     
@@ -40,6 +42,7 @@ struct FileBrowseField: View {
             if hasClearButton {
                 Button("Clear") {
                     url = nil
+                    onClear?()
                 }
             }
             Button("Browse…") {
@@ -59,6 +62,7 @@ struct FileBrowseField: View {
         if hasClearButton {
             Button {
                 url = nil
+                onClear?()
             } label: {
                 Text("Clear")
             }

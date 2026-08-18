@@ -28,6 +28,8 @@ import Combine
     private(set) var uuid: UUID
     
     @Published private var _isSuspended: Bool
+
+    @Published private var _autoStart: Bool
     
     @Published private var _externalDrives: [String: File]
     
@@ -48,6 +50,7 @@ import Combine
         case package = "Package"
         case uuid = "UUID"
         case isSuspended = "Suspended"
+        case autoStart = "AutoStart"
         case externalDrives = "ExternalDrives"
         case sharedDirectories = "SharedDirectories"
         case windowSettings = "WindowSettings"
@@ -68,6 +71,7 @@ import Combine
         _package = package ?? File(dummyFromPath: path)
         self.uuid = uuid
         _isSuspended = false
+        _autoStart = false
         _externalDrives = [:]
         _sharedDirectories = []
         _windowSettings = [:]
@@ -89,7 +93,8 @@ import Combine
         _package = try container.decode(File.self, forKey: .package)
         uuid = try container.decode(UUID.self, forKey: .uuid)
         _isSuspended = try container.decode(Bool.self, forKey: .isSuspended)
-        _externalDrives = (try container.decode([String: File].self, forKey: .externalDrives)).filter({ $0.value.isValid })
+        _autoStart = try container.decodeIfPresent(Bool.self, forKey: .autoStart) ?? false
+        _externalDrives = try container.decode([String: File].self, forKey: .externalDrives)
         _sharedDirectories = try container.decode([File].self, forKey: .sharedDirectories).filter({ $0.isValid })
         _windowSettings = try container.decode([Int: Window].self, forKey: .windowSettings)
         _terminalSettings = try container.decodeIfPresent([Int: Terminal].self, forKey: .terminalSettings) ?? [:]
@@ -104,6 +109,7 @@ import Combine
         try container.encode(_package, forKey: .package)
         try container.encode(uuid, forKey: .uuid)
         try container.encode(_isSuspended, forKey: .isSuspended)
+        try container.encode(_autoStart, forKey: .autoStart)
         try container.encode(_externalDrives, forKey: .externalDrives)
         try container.encode(_sharedDirectories, forKey: .sharedDirectories)
         try container.encode(_windowSettings, forKey: .windowSettings)
@@ -161,6 +167,16 @@ extension UTMRegistryEntry: UTMRegistryEntryDecodable {}
         
         set {
             _isSuspended = newValue
+        }
+    }
+
+    var autoStart: Bool {
+        get {
+            _autoStart
+        }
+
+        set {
+            _autoStart = newValue
         }
     }
     
@@ -270,6 +286,7 @@ extension UTMRegistryEntry: UTMRegistryEntryDecodable {}
     
     func update(copying other: UTMRegistryEntry) {
         isSuspended = other.isSuspended
+        autoStart = other.autoStart
         externalDrives = other.externalDrives
         sharedDirectories = other.sharedDirectories
         windowSettings = other.windowSettings
@@ -384,6 +401,27 @@ extension UTMRegistryEntry {
         let id: UUID = UUID()
         
         fileprivate var isValid: Bool
+
+        var availableURL: URL? {
+            if bookmark.isEmpty {
+                return isValid ? url : nil
+            }
+            guard let resolvedURL = try? URL(resolvingPersistentBookmarkData: bookmark),
+                  resolvedURL.startAccessingSecurityScopedResource() else {
+                return nil
+            }
+            defer {
+                resolvedURL.stopAccessingSecurityScopedResource()
+            }
+            guard FileManager.default.fileExists(atPath: resolvedURL.path) else {
+                return nil
+            }
+            return resolvedURL
+        }
+
+        var isAvailable: Bool {
+            availableURL != nil
+        }
         
         private enum CodingKeys: String, CodingKey {
             case path = "Path"

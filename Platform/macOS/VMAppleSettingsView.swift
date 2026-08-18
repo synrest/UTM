@@ -18,8 +18,14 @@ import SwiftUI
 
 struct VMAppleSettingsView: View {
     @ObservedObject var config: UTMAppleConfiguration
+    let registryEntry: UTMRegistryEntry?
     
     @State private var infoActive: Bool = true
+
+    init(config: UTMAppleConfiguration, registryEntry: UTMRegistryEntry? = nil) {
+        self.config = config
+        self.registryEntry = registryEntry
+    }
     
     private var hasVenturaFeatures: Bool {
         if #available(macOS 13, *) {
@@ -30,7 +36,7 @@ struct VMAppleSettingsView: View {
     }
     
     var body: some View {
-        NavigationLink(destination: VMConfigInfoView(config: $config.information).scrollable().settingsToolbar(), isActive: $infoActive) {
+        NavigationLink(destination: VMConfigInfoView(config: $config.information, registryEntry: registryEntry).scrollable().settingsToolbar(), isActive: $infoActive) {
             Label("Information", systemImage: "info.circle")
         }
         NavigationLink {

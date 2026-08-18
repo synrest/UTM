@@ -36,9 +36,23 @@ private enum IconStyle: String, Identifiable, CaseIterable {
 
 struct VMConfigInfoView: View {
     @Binding var config: UTMConfigurationInfo
+    #if os(macOS)
+    let registryEntry: UTMRegistryEntry?
+    #endif
     @State private var imageSelectVisible: Bool = false
     @State private var iconStyle: IconStyle = .generic
     @State private var warningMessage: String? = nil
+
+    #if os(macOS)
+    init(config: Binding<UTMConfigurationInfo>, registryEntry: UTMRegistryEntry? = nil) {
+        self._config = config
+        self.registryEntry = registryEntry
+    }
+    #else
+    init(config: Binding<UTMConfigurationInfo>) {
+        self._config = config
+    }
+    #endif
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -56,6 +70,9 @@ struct VMConfigInfoView: View {
                 iconSelector
                     .aspectRatio(1, contentMode: .fill)
                 iconStylePicker
+            }
+            if let registryEntry = registryEntry {
+                AutoStartToggleView(registryEntry: registryEntry)
             }
             #else
             Form {
@@ -197,6 +214,16 @@ struct VMConfigInfoView: View {
         imageSelectVisible = false
     }
 }
+
+#if os(macOS)
+private struct AutoStartToggleView: View {
+    @ObservedObject var registryEntry: UTMRegistryEntry
+
+    var body: some View {
+        Toggle("Start automatically when UTM launches", isOn: $registryEntry.autoStart)
+    }
+}
+#endif
 
 private struct IconPreview: View {
     let url: URL?

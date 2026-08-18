@@ -19,23 +19,25 @@ import SwiftUI
 struct VMDrivesSettingsView<Drive: UTMConfigurationDrive>: View {
     @Binding var drives: [Drive]
     let template: Drive
+    let registryEntry: UTMRegistryEntry?
     @State var newDrive: Drive
     @EnvironmentObject private var data: UTMData
     @State private var newDrivePopover: Bool = false
     @State private var importDrivePresented: Bool = false
     @State private var requestDriveDelete: Drive?
     
-    init(drives: Binding<[Drive]>, template: Drive) {
+    init(drives: Binding<[Drive]>, template: Drive, registryEntry: UTMRegistryEntry? = nil) {
         self._drives = drives
         self._newDrive = State<Drive>(initialValue: template)
         self.template = template
+        self.registryEntry = registryEntry
     }
 
     var body: some View {
         ForEach($drives) { $drive in
             let driveIndex = drives.firstIndex(of: drive)!
             NavigationLink {
-                DriveDetailsView(config: $drive, requestDriveDelete: $requestDriveDelete)
+                DriveDetailsView(config: $drive, requestDriveDelete: $requestDriveDelete, registryEntry: registryEntry)
                     .scrollable()
                     .settingsToolbar {
                         ToolbarItem(placement: .destructiveAction) {
@@ -156,10 +158,13 @@ struct VMDrivesSettingsView<Drive: UTMConfigurationDrive>: View {
 private struct DriveDetailsView<Drive: UTMConfigurationDrive>: View {
     @Binding var config: Drive
     @Binding var requestDriveDelete: Drive?
+    let registryEntry: UTMRegistryEntry?
     
     var body: some View {
         if config is UTMQemuConfigurationDrive {
-            VMConfigDriveDetailsView(config: $config as Any as! Binding<UTMQemuConfigurationDrive>, requestDriveDelete: $requestDriveDelete as Any as! Binding<UTMQemuConfigurationDrive?>)
+            VMConfigDriveDetailsView(config: $config as Any as! Binding<UTMQemuConfigurationDrive>, requestDriveDelete: $requestDriveDelete as Any as! Binding<UTMQemuConfigurationDrive?>) {
+                registryEntry?.removeExternalDrive(forId: config.id)
+            }
         } else if config is UTMAppleConfigurationDrive {
             VMConfigAppleDriveDetailsView(config: $config as Any as! Binding<UTMAppleConfigurationDrive>, requestDriveDelete: $requestDriveDelete as Any as! Binding<UTMAppleConfigurationDrive?>)
         } else {

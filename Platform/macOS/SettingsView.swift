@@ -186,10 +186,12 @@ struct ApplicationSettingsView: View {
             Toggle(isOn: $isPreventIdleSleep, label: {
                 Text("Prevent system from sleeping when any VM is running")
             })
-            Picker("When quitting UTM with running virtual machines", selection: $quitPolicy) {
-                Text("Save State").tag(UTMQuitPolicy.saveState.rawValue)
+            Picker("Running VMs on quit", selection: $quitPolicy) {
+                Text("Save State (Default)").tag(UTMQuitPolicy.saveState.rawValue)
                 Text("Request Power Down").tag(UTMQuitPolicy.requestPowerDown.rawValue)
             }
+            .fixedSize(horizontal: true, vertical: false)
+            .help("Choose whether UTM saves the state of running virtual machines or requests that their guest operating systems shut down when UTM quits.")
             Toggle(isOn: $isNoQuitConfirmation, label: {
                 Text("Do not show confirmation when closing a running VM")
             }).help("Closing a VM without properly shutting it down could result in data loss.")

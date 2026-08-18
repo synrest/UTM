@@ -96,7 +96,7 @@ struct VMAppleRemovableDrivesView: View {
                                 Label("Browse…", systemImage: "doc.badge.plus")
                             })
                             // Eject button
-                            if diskImage.isExternal && diskImage.imageURL != nil {
+                            if registryEntry.externalDrives[diskImage.id] != nil {
                                 Button(action: { clearRemovableImage(diskImage) }, label: {
                                     Label("Clear", systemImage: "eject")
                                 })

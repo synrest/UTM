@@ -864,16 +864,23 @@ extension UTMQemuVirtualMachine {
                 continue
             }
             let id = drive.id
-            if let bookmark = await registryEntry.externalDrives[id]?.remoteBookmark {
+            guard let file = await registryEntry.externalDrives[id] else {
+                if isMounting && (drive.imageType == .cd || drive.imageType == .disk) {
+                    // a placeholder image might have been mounted
+                    try await eject(drive)
+                }
+                continue
+            }
+            guard file.isAvailable else {
+                continue
+            }
+            if let bookmark = file.remoteBookmark {
                 // an image bookmark was saved while QEMU was running
                 try await changeMedium(drive, with: bookmark, isSecurityScoped: true, isAccessOnly: !isMounting)
-            } else if let localBookmark = await registryEntry.externalDrives[id]?.bookmark {
+            } else {
                 // an image bookmark was saved while QEMU was NOT running
-                let url = try URL(resolvingPersistentBookmarkData: localBookmark)
+                let url = try URL(resolvingPersistentBookmarkData: file.bookmark)
                 try await changeMedium(drive, to: url, isAccessOnly: !isMounting)
-            } else if isMounting && (drive.imageType == .cd || drive.imageType == .disk) {
-                // a placeholder image might have been mounted
-                try await eject(drive)
             }
         }
     }
@@ -910,9 +917,9 @@ extension UTMQemuVirtualMachine {
 
     @MainActor var remoteBookmarks: [URL: Data] {
         var dict = [URL: Data]()
-        for file in registryEntry.externalDrives.values {
-            if let bookmark = file.remoteBookmark {
-                dict[file.url] = bookmark
+        for file in registryEntry.externalDrives.values where file.isAvailable {
+            if let bookmark = file.remoteBookmark, let url = file.availableURL {
+                dict[url] = bookmark
             }
         }
         for file in registryEntry.sharedDirectories {

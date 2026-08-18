@@ -91,6 +91,15 @@ enum AlertItem: Identifiable {
     #if os(macOS)
     /// View controller for every VM currently active
     var vmWindows: [VMData: Any] = [:]
+
+    /// True after the single automatic VM startup pass for this process.
+    var didPerformAutoStart = false
+
+    /// VMs waiting for expected external disks to become available.
+    var pendingAutoStartVMIDs = Set<UUID>()
+
+    /// Prevents overlapping mount-triggered automatic startup passes.
+    var isRetryingPendingAutoStartVMs = false
     #else
     /// View controller for currently active VM
     var vmVC: Any?

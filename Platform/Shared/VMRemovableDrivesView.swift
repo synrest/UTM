@@ -128,7 +128,7 @@ struct VMRemovableDrivesView: View {
                             }
                         }
                         // Eject button
-                        if qemuVM.externalImageURL(for: drive) != nil {
+                        if qemuVM.registryEntry.externalDrives[drive.id] != nil {
                             Button(action: { clearRemovableImage(forDrive: drive) }, label: {
                                 Label("Clear", systemImage: "eject")
                             })

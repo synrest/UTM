@@ -19,6 +19,110 @@ import Carbon.HIToolbox
 
 @available(macOS 11, *)
 extension UTMData {
+    func autoStartVirtualMachines() async {
+        guard !didPerformAutoStart else {
+            return
+        }
+        didPerformAutoStart = true
+        logger.debug("Beginning VM autostart pass.")
+        for vm in virtualMachines where vm.isLoaded && vm.registryEntry?.autoStart == true {
+            guard vm.state == .stopped else {
+                logger.debug("Skipping autostart for '\(vm.detailsTitleLabel)' because it is already running.")
+                continue
+            }
+            if hasUnavailableExpectedExternalDisk(vm: vm) {
+                pendingAutoStartVMIDs.insert(vm.id)
+                logger.debug("Deferring autostart for '\(vm.detailsTitleLabel)' because an expected external disk is unavailable.")
+                continue
+            }
+            logger.debug("Selected '\(vm.detailsTitleLabel)' for autostart.")
+            do {
+                try await startHeadless(vm: vm)
+                logger.debug("Autostart succeeded for '\(vm.detailsTitleLabel)'.")
+            } catch {
+                logger.error("Autostart failed for '\(vm.detailsTitleLabel)': \(error.localizedDescription)")
+                showErrorAlert(message: error.localizedDescription)
+            }
+        }
+    }
+
+    func retryPendingAutoStartVirtualMachines() async {
+        guard !pendingAutoStartVMIDs.isEmpty, !isRetryingPendingAutoStartVMs else {
+            return
+        }
+        isRetryingPendingAutoStartVMs = true
+        defer {
+            isRetryingPendingAutoStartVMs = false
+        }
+        logger.debug("Mount notification received with pending autostart VMs.")
+        for id in Array(pendingAutoStartVMIDs) {
+            guard let vm = virtualMachines.first(where: { $0.id == id }),
+                  vm.isLoaded,
+                  vm.registryEntry?.autoStart == true else {
+                pendingAutoStartVMIDs.remove(id)
+                continue
+            }
+            guard vm.state == .stopped else {
+                pendingAutoStartVMIDs.remove(id)
+                continue
+            }
+            guard !hasUnavailableExpectedExternalDisk(vm: vm) else {
+                logger.debug("Pending autostart VM '\(vm.detailsTitleLabel)' still has an unavailable external disk.")
+                continue
+            }
+            logger.debug("Pending autostart VM '\(vm.detailsTitleLabel)' external resources are restored.")
+            pendingAutoStartVMIDs.remove(id)
+            do {
+                try await startHeadless(vm: vm)
+                logger.debug("Pending autostart succeeded for '\(vm.detailsTitleLabel)'.")
+            } catch {
+                logger.error("Pending autostart failed for '\(vm.detailsTitleLabel)': \(error.localizedDescription)")
+                showErrorAlert(message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func hasUnavailableExpectedExternalDisk(vm: VMData) -> Bool {
+        guard let wrapped = vm.wrapped as? UTMQemuVirtualMachine else {
+            return false
+        }
+        return wrapped.config.drives.contains { drive in
+            guard drive.isExternal,
+                  drive.imageType == .disk,
+                  let file = wrapped.registryEntry.externalDrives[drive.id] else {
+                return false
+            }
+            return !file.isAvailable
+        }
+    }
+
+    func startHeadless(vm: VMData, options: UTMVirtualMachineStartOptions = []) async throws {
+        guard let wrapped = vm.wrapped else {
+            throw UTMDataError.virtualMachineUnavailable
+        }
+        guard vmWindows[vm] == nil else {
+            throw UTMDataError.virtualMachineUnavailable
+        }
+        let session = VMHeadlessSessionState(for: wrapped) {
+            self.vmWindows.removeValue(forKey: vm)
+        }
+        vmWindows[vm] = session
+        do {
+            if wrapped.state == .paused {
+                try await wrapped.resume()
+            } else if wrapped.state == .stopped {
+                try await wrapped.start(options: options)
+            } else {
+                throw UTMDataError.virtualMachineUnavailable
+            }
+        } catch {
+            if (vmWindows[vm] as? VMHeadlessSessionState) === session {
+                vmWindows.removeValue(forKey: vm)
+            }
+            throw error
+        }
+    }
+
     func run(vm: VMData, options: UTMVirtualMachineStartOptions = [], startImmediately: Bool = true) {
         var window: Any? = vmWindows[vm]
         if window == nil {

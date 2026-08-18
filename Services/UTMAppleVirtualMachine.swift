@@ -953,7 +953,7 @@ extension UTMAppleVirtualMachine {
             if drive.isExternal, let url = drive.imageURL {
                 let file = try UTMRegistryEntry.File(url: url, isReadOnly: drive.isReadOnly)
                 registryEntry.externalDrives[drive.id] = file
-            } else if drive.isExternal {
+            } else if drive.isExternal && registryEntry.externalDrives[drive.id]?.isAvailable != false {
                 registryEntry.externalDrives.removeValue(forKey: drive.id)
             }
         }
@@ -985,7 +985,7 @@ extension UTMAppleVirtualMachine {
         for i in config.drives.indices {
             let id = config.drives[i].id
             if config.drives[i].isExternal {
-                config.drives[i].imageURL = registryEntry.externalDrives[id]?.url
+                config.drives[i].imageURL = registryEntry.externalDrives[id]?.availableURL
             }
         }
         if let file = registryEntry.macRecoveryIpsw {
