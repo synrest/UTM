@@ -256,39 +256,141 @@ private func printJSON(_ response: UTMControlResponse) throws {
 
 private func nativeRequest(_ request: UTMControlRequest) throws -> UTMControlResponse {
     do {
-        let response = try UTMControlClient().request(request)
-        if let error = response.error {
-            if CommandLine.arguments.contains("--json") {
-                try printJSON(response)
-            } else {
-                FileHandle.standardError.write(Data("\(error.code): \(error.message)\n".utf8))
-            }
-            Darwin.exit(nativeExitCode(for: error.code))
-        }
-        return response
+        return try requestNativeControl(request)
     } catch UTMControlClient.ClientError.unavailable {
-        let message = "UTM is not running or its control socket is unavailable."
-        let response = UTMControlResponse.failure(UTMControlError(code: UTMControlErrorCode.unavailable,
-                                                                  message: message, identifier: nil, retryable: true))
-        if CommandLine.arguments.contains("--json") {
-            try printJSON(response)
-        } else {
-            FileHandle.standardError.write(Data("\(UTMControlErrorCode.unavailable): \(message)\n".utf8))
+        do {
+            try NativeControlStartup.ensureAvailable()
+            return try requestNativeControl(request)
+        } catch let error as NativeControlStartup.Error {
+            exitNativeUnavailable(error.message)
+        } catch UTMControlClient.ClientError.unavailable {
+            exitNativeUnavailable("UTM is not running or its control socket is unavailable.")
+        } catch UTMControlClient.ClientError.protocolError {
+            exitNativeProtocolError()
         }
-        Darwin.exit(8)
     } catch UTMControlClient.ClientError.protocolError {
-        let message = "UTM returned an invalid control response."
-        let response = UTMControlResponse.failure(UTMControlError(code: UTMControlErrorCode.protocolError,
-                                                                  message: message, identifier: nil, retryable: true))
-        if CommandLine.arguments.contains("--json") {
-            try printJSON(response)
-        } else {
-            FileHandle.standardError.write(Data("\(UTMControlErrorCode.protocolError): \(message)\n".utf8))
-        }
-        Darwin.exit(nativeExitCode(for: UTMControlErrorCode.protocolError))
+        exitNativeProtocolError()
     } catch {
         throw error
     }
+}
+
+private func requestNativeControl(_ request: UTMControlRequest) throws -> UTMControlResponse {
+    let response = try UTMControlClient().request(request)
+    if let error = response.error {
+        if CommandLine.arguments.contains("--json") {
+            try printJSON(response)
+        } else {
+            FileHandle.standardError.write(Data("\(error.code): \(error.message)\n".utf8))
+        }
+        Darwin.exit(nativeExitCode(for: error.code))
+    }
+    return response
+}
+
+private func exitNativeUnavailable(_ message: String) -> Never {
+    let response = UTMControlResponse.failure(UTMControlError(code: UTMControlErrorCode.unavailable,
+                                                              message: message, identifier: nil, retryable: true))
+    if CommandLine.arguments.contains("--json") {
+        try? printJSON(response)
+    } else {
+        FileHandle.standardError.write(Data("\(UTMControlErrorCode.unavailable): \(message)\n".utf8))
+    }
+    Darwin.exit(8)
+}
+
+private func exitNativeProtocolError() -> Never {
+    let message = "UTM returned an invalid control response."
+    let response = UTMControlResponse.failure(UTMControlError(code: UTMControlErrorCode.protocolError,
+                                                              message: message, identifier: nil, retryable: true))
+    if CommandLine.arguments.contains("--json") {
+        try? printJSON(response)
+    } else {
+        FileHandle.standardError.write(Data("\(UTMControlErrorCode.protocolError): \(message)\n".utf8))
+    }
+    Darwin.exit(nativeExitCode(for: UTMControlErrorCode.protocolError))
+}
+
+private enum NativeControlStartup {
+    enum Error: Swift.Error {
+        case unavailable(String)
+
+        var message: String {
+            switch self {
+            case .unavailable(let message): return message
+            }
+        }
+    }
+
+    private static let timeout: TimeInterval = 10
+
+    static func ensureAvailable() throws {
+        let appURL = utmAppURL
+        guard FileManager.default.fileExists(atPath: appURL.path) else {
+            throw Error.unavailable("Unable to launch UTM because the application bundle was not found.")
+        }
+
+        if !isUTMRunning {
+            try launch(appURL)
+        }
+        try waitForSocket()
+    }
+
+    private static var isUTMRunning: Bool {
+        guard let bundleIdentifier = Bundle(url: utmAppURL)?.bundleIdentifier else {
+            return false
+        }
+        return !NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).isEmpty
+    }
+
+    private static func launch(_ appURL: URL) throws {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        configuration.hides = true
+        var launchError: Swift.Error?
+        let semaphore = DispatchSemaphore(value: 0)
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
+            launchError = error
+            semaphore.signal()
+        }
+        if semaphore.wait(timeout: .now() + 2) == .timedOut {
+            throw Error.unavailable("UTM launch did not complete within the startup window.")
+        }
+        if let launchError {
+            throw Error.unavailable("Unable to launch UTM: \(launchError.localizedDescription)")
+        }
+    }
+
+    private static func waitForSocket() throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        var delay: TimeInterval = 0.05
+        while Date() < deadline {
+            if let socketURL = UTMControlSocket.url,
+               FileManager.default.fileExists(atPath: socketURL.path) {
+                do {
+                    _ = try UTMControlClient().request(.list)
+                    return
+                } catch UTMControlClient.ClientError.unavailable {
+                    // The socket path may exist before the listener is ready.
+                } catch {
+                    throw Error.unavailable("UTM control socket returned an invalid response.")
+                }
+            }
+            Thread.sleep(forTimeInterval: delay)
+            delay = min(delay * 2, 0.5)
+        }
+        throw Error.unavailable("UTM started but its native control socket did not become available within 10 seconds.")
+    }
+}
+
+private var utmAppURL: URL {
+    if let executableURL = Bundle.main.executableURL?.resolvingSymlinksInPath() {
+        let utmURL = executableURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        if utmURL.pathExtension == "app" {
+            return utmURL
+        }
+    }
+    return URL(fileURLWithPath: "/Applications/UTM.app")
 }
 
 private func nativeExitCode(for code: String) -> Int32 {
