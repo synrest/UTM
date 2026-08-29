@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 @MainActor
 final class UTMControlServer {
@@ -7,19 +8,32 @@ final class UTMControlServer {
     private let descriptor: Int32
     private let source: DispatchSourceRead
     private let socketPath: String
+    private let socketLockPath: String
+    private let socketIdentity: SocketIdentity
     private var lifecycleGates: [ObjectIdentifier: VMOperationGate] = [:]
+
+    private struct SocketIdentity {
+        let device: dev_t
+        let inode: ino_t
+    }
 
     init(data: UTMData, startupTask: Task<Void, Never>) throws {
         self.data = data
         self.startupTask = startupTask
         guard let url = UTMControlSocket.url else { throw ServerError.unavailable() }
         self.socketPath = url.path
+        self.socketLockPath = url.path + ".lock"
         logger.debug("Native control socket path: \(url.path)")
         let directory = url.deletingLastPathComponent()
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {
             throw ServerError.unavailable("create directory \(directory.path): \(error.localizedDescription)")
+        }
+        let lockDescriptor = try Self.acquireSocketLock(at: socketLockPath)
+        defer {
+            flock(lockDescriptor, LOCK_UN)
+            close(lockDescriptor)
         }
         try Self.removeStaleSocket(at: url.path)
 
@@ -58,9 +72,15 @@ final class UTMControlServer {
         guard chmod(url.path, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
             let error = Self.posixError()
             close(descriptor)
-            unlink(url.path)
             throw ServerError.unavailable("chmod \(url.path): \(error)")
         }
+        var socketInfo = stat()
+        guard lstat(url.path, &socketInfo) == 0 else {
+            let error = Self.posixError()
+            close(descriptor)
+            throw ServerError.unavailable("inspect bound socket \(url.path): \(error)")
+        }
+        self.socketIdentity = SocketIdentity(device: socketInfo.st_dev, inode: socketInfo.st_ino)
 
         let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: .global(qos: .userInitiated))
         self.source = source
@@ -71,6 +91,15 @@ final class UTMControlServer {
 
     deinit {
         source.cancel()
+        guard let lockDescriptor = try? Self.acquireSocketLock(at: socketLockPath) else { return }
+        defer {
+            flock(lockDescriptor, LOCK_UN)
+            close(lockDescriptor)
+        }
+        var socketInfo = stat()
+        guard lstat(socketPath, &socketInfo) == 0,
+              socketInfo.st_dev == socketIdentity.device,
+              socketInfo.st_ino == socketIdentity.inode else { return }
         unlink(socketPath)
     }
 
@@ -126,11 +155,19 @@ final class UTMControlServer {
         }
         switch request {
         case .list:
-            return .list(data.virtualMachines.map(record))
+            do {
+                return .list(try data.virtualMachines.map(record))
+            } catch let error as ControlRecordError {
+                return .failure(error.controlError())
+            } catch {
+                return .failure(ControlRecordError.backendUnavailable.controlError())
+            }
         case .status(let identifier):
             do {
-                return .status(record(try resolve(identifier)))
+                return .status(try record(try resolve(identifier)))
             } catch let error as ControlLookupError {
+                return .failure(error.controlError(identifier: identifier))
+            } catch let error as ControlRecordError {
                 return .failure(error.controlError(identifier: identifier))
             } catch {
                 return .failure(UTMControlError(code: UTMControlErrorCode.notFound,
@@ -191,7 +228,7 @@ final class UTMControlServer {
                 if vm.state == .stopping {
                     try await waitForStopped(vm)
                 } else if wasQueued && vm.state == .stopped {
-                    return .operation(operation.rawValue, record(vm))
+                    return .operation(operation.rawValue, try record(vm))
                 } else {
                     guard vm.state == .started || vm.state == .paused else { throw ControlOperationError.invalidState }
                     if vm.state == .paused {
@@ -212,8 +249,10 @@ final class UTMControlServer {
                 vm.state = wrapped.state
                 try await waitForState(vm, expected: .started, timeout: 15)
             }
-            return .operation(operation.rawValue, record(vm))
+            return .operation(operation.rawValue, try record(vm))
         } catch let error as ControlOperationError {
+            return .failure(error.controlError(identifier: identifier))
+        } catch let error as ControlRecordError {
             return .failure(error.controlError(identifier: identifier))
         } catch {
             return .failure(UTMControlError(code: UTMControlErrorCode.backendFailure,
@@ -250,26 +289,23 @@ final class UTMControlServer {
         return vm
     }
 
-    private func record(_ vm: VMData) -> UTMControlVM {
+    private func record(_ vm: VMData) throws -> UTMControlVM {
         let wrapped = vm.wrapped
-        let backend: String
+        let backend: UTMBackend
         if let wrapped {
-            backend = controlBackend(wrapped.config.backend)
-        } else if let config = try? UTMQemuConfiguration.load(from: vm.pathUrl) {
-            backend = controlBackend(config.backend)
+            backend = wrapped.config.backend
         } else {
-            backend = "unknown"
+            do {
+                backend = try UTMQemuConfiguration.load(from: vm.pathUrl).backend
+            } catch {
+                throw ControlRecordError.backendUnavailable
+            }
+        }
+        guard backend == .qemu || backend == .apple else {
+            throw ControlRecordError.backendUnavailable
         }
         return UTMControlVM(uuid: vm.id.uuidString, name: vm.detailsTitleLabel,
-                            state: vm.state.controlName, backend: backend, loaded: vm.isLoaded)
-    }
-
-    private func controlBackend(_ backend: UTMBackend) -> String {
-        switch backend {
-        case .qemu: return "qemu"
-        case .apple: return "apple"
-        case .unknown: return "unknown"
-        }
+                            state: vm.state.controlName, backend: backend == .qemu ? "qemu" : "apple", loaded: vm.isLoaded)
     }
 
     private static func removeStaleSocket(at path: String) throws {
@@ -305,7 +341,19 @@ final class UTMControlServer {
         guard unlink(path) == 0 else { throw ServerError.unavailable("remove stale socket \(path): \(posixError())") }
     }
 
-    private static func posixError() -> String {
+    nonisolated private static func acquireSocketLock(at path: String) throws -> Int32 {
+        let descriptor = open(path, O_CREAT | O_RDWR | O_NONBLOCK, mode_t(S_IRUSR | S_IWUSR))
+        guard descriptor >= 0 else { throw ServerError.unavailable("open socket lock \(path): \(posixError())") }
+        guard fchmod(descriptor, mode_t(S_IRUSR | S_IWUSR)) == 0,
+              flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            let error = posixError()
+            close(descriptor)
+            throw ServerError.unavailable("acquire socket lock \(path): \(error)")
+        }
+        return descriptor
+    }
+
+    nonisolated private static func posixError() -> String {
         String(cString: strerror(errno))
     }
 
@@ -352,6 +400,16 @@ final class UTMControlServer {
                                        message: "Timed out waiting for the virtual machine to reach the requested state.",
                                        identifier: identifier, retryable: true)
             }
+        }
+    }
+
+    enum ControlRecordError: Error {
+        case backendUnavailable
+
+        func controlError(identifier: String? = nil) -> UTMControlError {
+            UTMControlError(code: UTMControlErrorCode.backendUnavailable,
+                            message: "The virtual machine backend could not be determined from its configuration.",
+                            identifier: identifier, retryable: false)
         }
     }
 }

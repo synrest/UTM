@@ -251,6 +251,7 @@ enum UTMControlErrorCode {
     static let protocolError = "PROTOCOL_ERROR"
     static let invalidState = "INVALID_VM_STATE"
     static let vmUnavailable = "VM_UNAVAILABLE"
+    static let backendUnavailable = "BACKEND_UNAVAILABLE"
     static let backendFailure = "BACKEND_FAILURE"
     static let operationTimeout = "OPERATION_TIMEOUT"
     static let powerDownTimeout = "POWER_DOWN_TIMEOUT"
