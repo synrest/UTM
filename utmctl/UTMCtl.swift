@@ -287,7 +287,13 @@ private func nativeRequest(_ request: UTMControlRequest) throws -> UTMControlRes
 }
 
 private func requestNativeControl(_ request: UTMControlRequest) throws -> UTMControlResponse {
-    let response = try UTMControlClient().request(request)
+    let responseTimeout: TimeInterval
+    if case .stop = request {
+        responseTimeout = 55
+    } else {
+        responseTimeout = UTMControlTransport.timeout
+    }
+    let response = try UTMControlClient().request(request, responseTimeout: responseTimeout)
     if let error = response.error {
         if CommandLine.arguments.contains("--json") {
             try printJSON(response)

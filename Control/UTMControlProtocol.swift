@@ -122,6 +122,102 @@ struct UTMControlError: Codable {
     let retryable: Bool
 }
 
+enum UTMControlTransportError: Error {
+    case unavailable
+    case protocolError
+}
+
+enum UTMControlTransport {
+    static let timeout: TimeInterval = 10
+    private static let timeoutMilliseconds: Int32 = 10_000
+    private static let maximumFrameSize = 1024 * 1024
+
+    static func configure(_ descriptor: Int32) throws {
+        var noSigPipe: Int32 = 1
+        guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            throw UTMControlTransportError.unavailable
+        }
+    }
+
+    static func makeNonblocking(_ descriptor: Int32) throws {
+        let flags = fcntl(descriptor, F_GETFL, 0)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw UTMControlTransportError.unavailable
+        }
+    }
+
+    static func writeAll(_ data: Data, to descriptor: Int32, timeout: TimeInterval = UTMControlTransport.timeout) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        try data.withUnsafeBytes { bytes in
+            guard let baseAddress = bytes.baseAddress else { return }
+            var offset = 0
+            while offset < bytes.count {
+                try wait(for: descriptor, events: Int16(POLLOUT), until: deadline)
+                let count = Darwin.write(descriptor, baseAddress.advanced(by: offset), bytes.count - offset)
+                if count > 0 {
+                    offset += count
+                } else if count < 0, errno == EINTR {
+                    continue
+                } else if count < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+                    continue
+                } else {
+                    throw UTMControlTransportError.unavailable
+                }
+            }
+        }
+    }
+
+    static func readFrame(from descriptor: Int32, timeout: TimeInterval = UTMControlTransport.timeout) throws -> Data {
+        let deadline = Date().addingTimeInterval(timeout)
+        var frame = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            try wait(for: descriptor, events: Int16(POLLIN), until: deadline)
+            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            if count == 0 {
+                throw UTMControlTransportError.unavailable
+            }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw UTMControlTransportError.unavailable
+            }
+            frame.append(contentsOf: buffer[0..<count])
+            if frame.contains(10) {
+                return frame
+            }
+            if frame.count > maximumFrameSize {
+                throw UTMControlTransportError.protocolError
+            }
+        }
+    }
+
+    private static func wait(for descriptor: Int32, events: Int16, until deadline: Date) throws {
+        var pollDescriptor = pollfd(fd: descriptor, events: events, revents: 0)
+        while true {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { throw UTMControlTransportError.unavailable }
+            let milliseconds = min(timeoutMilliseconds, max(1, Int32(remaining * 1000)))
+            let result = Darwin.poll(&pollDescriptor, 1, milliseconds)
+            if result > 0 {
+                let errors = Int16(POLLERR | POLLNVAL)
+                guard pollDescriptor.revents & errors == 0 else {
+                    throw UTMControlTransportError.unavailable
+                }
+                return
+            }
+            if result == 0 {
+                if deadline.timeIntervalSinceNow > 0 {
+                    continue
+                }
+                throw UTMControlTransportError.unavailable
+            }
+            if errno != EINTR {
+                throw UTMControlTransportError.unavailable
+            }
+        }
+    }
+}
+
 enum UTMControlErrorCode {
     static let unavailable = "UTM_UNAVAILABLE"
     static let notFound = "VM_NOT_FOUND"
@@ -165,7 +261,7 @@ final class UTMControlClient {
         case protocolError
     }
 
-    func request(_ request: UTMControlRequest) throws -> UTMControlResponse {
+    func request(_ request: UTMControlRequest, responseTimeout: TimeInterval = UTMControlTransport.timeout) throws -> UTMControlResponse {
         guard let url = UTMControlSocket.url else {
             throw ClientError.unavailable
         }
@@ -176,18 +272,21 @@ final class UTMControlClient {
         let decoder = JSONDecoder()
         var payload = try encoder.encode(request)
         payload.append(10)
-        try payload.withUnsafeBytes { bytes in
-            guard write(descriptor, bytes.baseAddress, bytes.count) == bytes.count else {
-                throw ClientError.unavailable
-            }
+        do {
+            try UTMControlTransport.writeAll(payload, to: descriptor)
+        } catch UTMControlTransportError.protocolError {
+            throw ClientError.protocolError
+        } catch {
+            throw ClientError.unavailable
         }
 
-        var responseData = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let count = read(descriptor, &buffer, buffer.count)
-            if count <= 0 { break }
-            responseData.append(contentsOf: buffer[0..<count])
+        let responseData: Data
+        do {
+            responseData = try UTMControlTransport.readFrame(from: descriptor, timeout: responseTimeout)
+        } catch UTMControlTransportError.protocolError {
+            throw ClientError.protocolError
+        } catch {
+            throw ClientError.unavailable
         }
         guard let response = try? decoder.decode(UTMControlResponse.self, from: responseData) else {
             throw ClientError.protocolError
@@ -198,6 +297,13 @@ final class UTMControlClient {
     private func connect(to path: String) throws -> Int32 {
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw ClientError.unavailable }
+        do {
+            try UTMControlTransport.configure(descriptor)
+            try UTMControlTransport.makeNonblocking(descriptor)
+        } catch {
+            close(descriptor)
+            throw ClientError.unavailable
+        }
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = Array(path.utf8) + [0]

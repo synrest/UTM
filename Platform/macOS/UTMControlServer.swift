@@ -7,6 +7,7 @@ final class UTMControlServer {
     private let descriptor: Int32
     private let source: DispatchSourceRead
     private let socketPath: String
+    private var lifecycleGates: [ObjectIdentifier: VMOperationGate] = [:]
 
     init(data: UTMData, startupTask: Task<Void, Never>) throws {
         self.data = data
@@ -25,6 +26,13 @@ final class UTMControlServer {
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw ServerError.unavailable("socket: \(Self.posixError())") }
         self.descriptor = descriptor
+        do {
+            try UTMControlTransport.configure(descriptor)
+            try UTMControlTransport.makeNonblocking(descriptor)
+        } catch {
+            close(descriptor)
+            throw ServerError.unavailable("configure socket \(url.path): \(Self.posixError())")
+        }
 
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -69,7 +77,17 @@ final class UTMControlServer {
     private func acceptConnections() {
         while true {
             let client = accept(descriptor, nil, nil)
-            guard client >= 0 else { return }
+            if client < 0 {
+                if errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR { return }
+                return
+            }
+            do {
+                try UTMControlTransport.configure(client)
+                try UTMControlTransport.makeNonblocking(client)
+            } catch {
+                close(client)
+                continue
+            }
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 Self.handle(client: client, server: self)
             }
@@ -77,19 +95,12 @@ final class UTMControlServer {
     }
 
     nonisolated private static func handle(client: Int32, server: UTMControlServer?) {
-        var requestData = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while !requestData.contains(10) {
-            let count = read(client, &buffer, buffer.count)
-            if count <= 0 {
-                close(client)
-                return
-            }
-            requestData.append(contentsOf: buffer[0..<count])
-            if requestData.count > 1024 * 1024 {
-                close(client)
-                return
-            }
+        let requestData: Data
+        do {
+            requestData = try UTMControlTransport.readFrame(from: client)
+        } catch {
+            close(client)
+            return
         }
         guard let server else {
             close(client)
@@ -98,15 +109,17 @@ final class UTMControlServer {
         Task { @MainActor in
             defer { close(client) }
             let response = await server.response(for: requestData)
-            guard let encoded = try? JSONEncoder().encode(response) else { return }
-            var output = encoded
+            guard var output = try? JSONEncoder().encode(response) else { return }
             output.append(10)
-            _ = output.withUnsafeBytes { write(client, $0.baseAddress, $0.count) }
+            try? UTMControlTransport.writeAll(output, to: client)
         }
     }
 
     private func response(for requestData: Data) async -> UTMControlResponse {
-        await startupTask.value
+        guard await UTMControlStartupWaiter.wait(for: startupTask) else {
+            return .failure(UTMControlError(code: UTMControlErrorCode.unavailable,
+                                            message: "UTM startup did not complete within the control request window.", identifier: nil, retryable: true))
+        }
         guard let request = try? JSONDecoder().decode(UTMControlRequest.self, from: requestData) else {
             return .failure(UTMControlError(code: UTMControlErrorCode.protocolError,
                                             message: "Invalid control request.", identifier: nil, retryable: false))
@@ -141,6 +154,31 @@ final class UTMControlServer {
     private func perform(_ operation: Operation, identifier: String) async -> UTMControlResponse {
         do {
             let vm = try resolve(identifier)
+            let key = ObjectIdentifier(vm)
+            let gate = lifecycleGates[key] ?? {
+                let gate = VMOperationGate()
+                lifecycleGates[key] = gate
+                return gate
+            }()
+            return await gate.perform { @MainActor [weak self, weak vm] wasQueued in
+                guard let self, let vm,
+                      self.data.virtualMachines.contains(where: { $0 === vm }) else {
+                    return .failure(ControlLookupError.notFound.controlError(identifier: identifier))
+                }
+                return await self.performSerialized(operation, vm: vm, identifier: identifier, wasQueued: wasQueued)
+            }
+        } catch let error as ControlLookupError {
+            return .failure(error.controlError(identifier: identifier))
+        } catch let error as ControlOperationError {
+            return .failure(error.controlError(identifier: identifier))
+        } catch {
+            return .failure(UTMControlError(code: UTMControlErrorCode.backendFailure,
+                                            message: "The virtual machine operation failed.", identifier: identifier, retryable: false))
+        }
+    }
+
+    private func performSerialized(_ operation: Operation, vm: VMData, identifier: String, wasQueued: Bool) async -> UTMControlResponse {
+        do {
             guard let wrapped = vm.wrapped else {
                 throw ControlOperationError.vmUnavailable
             }
@@ -149,9 +187,19 @@ final class UTMControlServer {
                 guard vm.state == .stopped else { throw ControlOperationError.invalidState }
                 try await data.startHeadless(vm: vm)
             case .stop:
-                guard vm.state == .started || vm.state == .paused else { throw ControlOperationError.invalidState }
-                try await wrapped.stop(usingMethod: .request)
-                try await waitForStopped(vm)
+                if vm.state == .stopping {
+                    try await waitForStopped(vm)
+                } else if wasQueued && vm.state == .stopped {
+                    return .operation(operation.rawValue, record(vm))
+                } else {
+                    guard vm.state == .started || vm.state == .paused else { throw ControlOperationError.invalidState }
+                    if vm.state == .paused {
+                        try await wrapped.resume()
+                        vm.state = wrapped.state
+                    }
+                    try await wrapped.stop(usingMethod: .request)
+                    try await waitForStopped(vm)
+                }
             case .suspend:
                 guard vm.state == .started else { throw ControlOperationError.invalidState }
                 try await wrapped.pause()
@@ -162,8 +210,6 @@ final class UTMControlServer {
                 vm.state = wrapped.state
             }
             return .operation(operation.rawValue, record(vm))
-        } catch let error as ControlLookupError {
-            return .failure(error.controlError(identifier: identifier))
         } catch let error as ControlOperationError {
             return .failure(error.controlError(identifier: identifier))
         } catch {
@@ -207,8 +253,9 @@ final class UTMControlServer {
             return
         }
         guard (info.st_mode & S_IFMT) == S_IFSOCK else { throw ServerError.unavailable("refusing to replace non-socket path \(path)") }
-        let probe = socket(AF_UNIX, SOCK_STREAM, 0)
-        if probe >= 0 {
+        for attempt in 0..<3 {
+            let probe = socket(AF_UNIX, SOCK_STREAM, 0)
+            guard probe >= 0 else { throw ServerError.unavailable("probe socket \(path): \(posixError())") }
             var address = sockaddr_un()
             address.sun_family = sa_family_t(AF_UNIX)
             let bytes = Array(path.utf8) + [0]
@@ -220,8 +267,14 @@ final class UTMControlServer {
                     Darwin.connect(probe, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
                 }
             }
+            let connectError = errno
             close(probe)
             if result == 0 { throw ServerError.unavailable("control socket is already active at \(path)") }
+            if connectError != ECONNREFUSED {
+                if connectError == ENOENT { return }
+                throw ServerError.unavailable("inspect socket path \(path): \(String(cString: strerror(connectError)))")
+            }
+            if attempt < 2 { Thread.sleep(forTimeInterval: 0.05) }
         }
         guard unlink(path) == 0 else { throw ServerError.unavailable("remove stale socket \(path): \(posixError())") }
     }
@@ -270,6 +323,56 @@ final class UTMControlServer {
                                        identifier: identifier, retryable: true)
             }
         }
+    }
+}
+
+@MainActor
+private final class VMOperationGate {
+    private var previous: Task<UTMControlResponse, Never>?
+
+    func perform(_ operation: @escaping @MainActor (Bool) async -> UTMControlResponse) async -> UTMControlResponse {
+        let prior = previous
+        let current = Task { @MainActor in
+            _ = await prior?.value
+            return await operation(prior != nil)
+        }
+        previous = current
+        return await current.value
+    }
+}
+
+private final class UTMControlStartupWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var completed = false
+
+    static func wait(for startupTask: Task<Void, Never>) async -> Bool {
+        let waiter = Self()
+        return await withCheckedContinuation { continuation in
+            waiter.lock.lock()
+            waiter.continuation = continuation
+            waiter.lock.unlock()
+            Task { @MainActor in
+                await startupTask.value
+                waiter.finish(true)
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: 10 * NSEC_PER_SEC)
+                if !Task.isCancelled { waiter.finish(false) }
+            }
+        }
+    }
+
+    private func finish(_ value: Bool) {
+        lock.lock()
+        guard !completed, let continuation else {
+            lock.unlock()
+            return
+        }
+        completed = true
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(returning: value)
     }
 }
 
