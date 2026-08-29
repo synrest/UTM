@@ -11,9 +11,13 @@ import Security
 enum UTMControlRequest: Codable {
     case list
     case status(identifier: String)
+    case start(identifier: String)
+    case stop(identifier: String)
+    case suspend(identifier: String)
+    case resume(identifier: String)
 
     private enum CodingKeys: String, CodingKey { case command, identifier }
-    private enum Command: String, Codable { case list, status }
+    private enum Command: String, Codable { case list, status, start, stop, suspend, resume }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -22,6 +26,14 @@ enum UTMControlRequest: Codable {
             self = .list
         case .status:
             self = .status(identifier: try container.decode(String.self, forKey: .identifier))
+        case .start:
+            self = .start(identifier: try container.decode(String.self, forKey: .identifier))
+        case .stop:
+            self = .stop(identifier: try container.decode(String.self, forKey: .identifier))
+        case .suspend:
+            self = .suspend(identifier: try container.decode(String.self, forKey: .identifier))
+        case .resume:
+            self = .resume(identifier: try container.decode(String.self, forKey: .identifier))
         }
     }
 
@@ -32,6 +44,18 @@ enum UTMControlRequest: Codable {
             try container.encode(Command.list, forKey: .command)
         case .status(let identifier):
             try container.encode(Command.status, forKey: .command)
+            try container.encode(identifier, forKey: .identifier)
+        case .start(let identifier):
+            try container.encode(Command.start, forKey: .command)
+            try container.encode(identifier, forKey: .identifier)
+        case .stop(let identifier):
+            try container.encode(Command.stop, forKey: .command)
+            try container.encode(identifier, forKey: .identifier)
+        case .suspend(let identifier):
+            try container.encode(Command.suspend, forKey: .command)
+            try container.encode(identifier, forKey: .identifier)
+        case .resume(let identifier):
+            try container.encode(Command.resume, forKey: .command)
             try container.encode(identifier, forKey: .identifier)
         }
     }
@@ -82,6 +106,10 @@ struct UTMControlResponse: Codable {
         Self(schema: 1, command: "status", vms: nil, vm: vm, error: nil)
     }
 
+    static func operation(_ command: String, _ vm: UTMControlVM) -> Self {
+        Self(schema: 1, command: command, vms: nil, vm: vm, error: nil)
+    }
+
     static func failure(_ error: UTMControlError) -> Self {
         Self(schema: 1, command: nil, vms: nil, vm: nil, error: error)
     }
@@ -99,6 +127,10 @@ enum UTMControlErrorCode {
     static let notFound = "VM_NOT_FOUND"
     static let ambiguous = "AMBIGUOUS_VM_NAME"
     static let protocolError = "PROTOCOL_ERROR"
+    static let invalidState = "INVALID_VM_STATE"
+    static let vmUnavailable = "VM_UNAVAILABLE"
+    static let backendFailure = "BACKEND_FAILURE"
+    static let powerDownTimeout = "POWER_DOWN_TIMEOUT"
 }
 
 enum UTMControlSocket {

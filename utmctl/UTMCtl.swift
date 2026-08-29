@@ -30,6 +30,7 @@ struct UTMCtl: ParsableCommand {
             Status.self,
             Start.self,
             Suspend.self,
+            Resume.self,
             Stop.self,
             Attach.self,
             File.self,
@@ -254,6 +255,16 @@ private func printJSON(_ response: UTMControlResponse) throws {
     print()
 }
 
+private func printNativeOperation(_ response: UTMControlResponse, json: Bool) throws {
+    if json {
+        try printJSON(response)
+    } else if let vm = response.vm {
+        print(vm.state)
+    } else {
+        try throwResponseError(response)
+    }
+}
+
 private func nativeRequest(_ request: UTMControlRequest) throws -> UTMControlResponse {
     do {
         return try requestNativeControl(request)
@@ -398,6 +409,7 @@ private func nativeExitCode(for code: String) -> Int32 {
     case UTMControlErrorCode.notFound: return 3
     case UTMControlErrorCode.ambiguous: return 4
     case UTMControlErrorCode.unavailable: return 8
+    case UTMControlErrorCode.powerDownTimeout: return 11
     default: return 10
     }
 }
@@ -408,104 +420,65 @@ private func throwResponseError(_ response: UTMControlResponse) throws {
 }
 
 extension UTMCtl {
-    struct Start: UTMAPICommand {
+    struct Start: NativeUTMAPICommand {
         static var configuration = CommandConfiguration(
-            abstract: "Start a virtual machine or resume a suspended virtual machine."
+            abstract: "Start a stopped virtual machine."
         )
         
         @OptionGroup var environment: EnvironmentOptions
-        
+        @Flag(name: .long, help: "Output JSON.") var json = false
         @OptionGroup var identifer: VMIdentifier
-        
-        @Flag(name: .shortAndLong, help: "Attach to the first serial port after start.")
-        var attach: Bool = false
-        
-        @Flag(help: "Run VM as a snapshot and do not save changes to disk.")
-        var disposable: Bool = false
 
-        @Flag(help: "Boot a VM in recovery mode.")
-        var recovery: Bool = false
-
-        func run(with application: UTMScriptingApplication) throws {
-            let vm = try virtualMachine(forIdentifier: identifer, in: application)
-            vm.startSaving!(!disposable, recovery: recovery)
-            if attach {
-                print("WARNING: attach command is not implemented yet!")
-            }
+        func runNative() throws {
+            try printNativeOperation(nativeRequest(.start(identifier: identifer.identifier)), json: json)
         }
     }
 }
 
 extension UTMCtl {
-    struct Suspend: UTMAPICommand {
+    struct Suspend: NativeUTMAPICommand {
         static var configuration = CommandConfiguration(
             abstract: "Suspend running a virtual machine to memory."
         )
         
         @OptionGroup var environment: EnvironmentOptions
-        
+        @Flag(name: .long, help: "Output JSON.") var json = false
         @OptionGroup var identifer: VMIdentifier
-        
-        @Flag(name: .shortAndLong, help: "Save the VM state to disk after suspending.")
-        var saveState: Bool = false
-        
-        func run(with application: UTMScriptingApplication) throws {
-            let vm = try virtualMachine(forIdentifier: identifer, in: application)
-            vm.suspendSaving!(saveState)
+
+        func runNative() throws {
+            try printNativeOperation(nativeRequest(.suspend(identifier: identifer.identifier)), json: json)
         }
     }
 }
 
 extension UTMCtl {
-    struct Stop: UTMAPICommand {
+    struct Resume: NativeUTMAPICommand {
         static var configuration = CommandConfiguration(
-            abstract: "Shuts down a running virtual machine."
+            abstract: "Resume a suspended virtual machine."
+        )
+
+        @OptionGroup var environment: EnvironmentOptions
+        @Flag(name: .long, help: "Output JSON.") var json = false
+        @OptionGroup var identifer: VMIdentifier
+
+        func runNative() throws {
+            try printNativeOperation(nativeRequest(.resume(identifier: identifer.identifier)), json: json)
+        }
+    }
+}
+
+extension UTMCtl {
+    struct Stop: NativeUTMAPICommand {
+        static var configuration = CommandConfiguration(
+            abstract: "Request a graceful guest shutdown."
         )
         
-        struct Style: ParsableArguments {
-            @Flag(name: .long, help: "Force stop by sending a power off event (default)")
-            var force: Bool = false
-            
-            @Flag(name: .long, help: "Force kill the VM process")
-            var kill: Bool = false
-            
-            @Flag(name: .long, help: "Request power down from guest operating system")
-            var request: Bool = false
-            
-            struct InvalidStyleError: LocalizedError {
-                var errorDescription: String? {
-                    "You can only specify one of: --force, --kill, or --request"
-                }
-            }
-            
-            mutating func validate() throws {
-                let count = [force, kill, request].filter({ $0 }).count
-                guard count <= 1 else {
-                    throw InvalidStyleError()
-                }
-                if count == 0 {
-                    force = true
-                }
-            }
-        }
-        
         @OptionGroup var environment: EnvironmentOptions
-        
+        @Flag(name: .long, help: "Output JSON.") var json = false
         @OptionGroup var identifer: VMIdentifier
-        
-        @OptionGroup var style: Style
-        
-        func run(with application: UTMScriptingApplication) throws {
-            let vm = try virtualMachine(forIdentifier: identifer, in: application)
-            var stopMethod: UTMScriptingStopMethod = .force
-            if style.request {
-                stopMethod = .request
-            } else if style.force {
-                stopMethod = .force
-            } else if style.kill {
-                stopMethod = .kill
-            }
-            vm.stopBy!(stopMethod)
+
+        func runNative() throws {
+            try printNativeOperation(nativeRequest(.stop(identifier: identifer.identifier)), json: json)
         }
     }
 }

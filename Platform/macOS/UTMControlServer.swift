@@ -123,6 +123,60 @@ final class UTMControlServer {
                 return .failure(UTMControlError(code: UTMControlErrorCode.notFound,
                                                 message: "Virtual machine not found.", identifier: identifier, retryable: false))
             }
+        case .start(let identifier):
+            return await perform(.start, identifier: identifier)
+        case .stop(let identifier):
+            return await perform(.stop, identifier: identifier)
+        case .suspend(let identifier):
+            return await perform(.suspend, identifier: identifier)
+        case .resume(let identifier):
+            return await perform(.resume, identifier: identifier)
+        }
+    }
+
+    private enum Operation: String {
+        case start, stop, suspend, resume
+    }
+
+    private func perform(_ operation: Operation, identifier: String) async -> UTMControlResponse {
+        do {
+            let vm = try resolve(identifier)
+            guard let wrapped = vm.wrapped else {
+                throw ControlOperationError.vmUnavailable
+            }
+            switch operation {
+            case .start:
+                guard vm.state == .stopped else { throw ControlOperationError.invalidState }
+                try await data.startHeadless(vm: vm)
+            case .stop:
+                guard vm.state == .started || vm.state == .paused else { throw ControlOperationError.invalidState }
+                try await wrapped.stop(usingMethod: .request)
+                try await waitForStopped(vm)
+            case .suspend:
+                guard vm.state == .started else { throw ControlOperationError.invalidState }
+                try await wrapped.pause()
+                vm.state = wrapped.state
+            case .resume:
+                guard vm.state == .paused else { throw ControlOperationError.invalidState }
+                try await wrapped.resume()
+                vm.state = wrapped.state
+            }
+            return .operation(operation.rawValue, record(vm))
+        } catch let error as ControlLookupError {
+            return .failure(error.controlError(identifier: identifier))
+        } catch let error as ControlOperationError {
+            return .failure(error.controlError(identifier: identifier))
+        } catch {
+            return .failure(UTMControlError(code: UTMControlErrorCode.backendFailure,
+                                            message: "The virtual machine operation failed.", identifier: identifier, retryable: false))
+        }
+    }
+
+    private func waitForStopped(_ vm: VMData) async throws {
+        let deadline = Date().addingTimeInterval(45)
+        while vm.state != .stopped {
+            guard Date() < deadline else { throw ControlOperationError.powerDownTimeout }
+            try await Task.sleep(nanoseconds: 100 * NSEC_PER_MSEC)
         }
     }
 
@@ -193,6 +247,27 @@ final class UTMControlServer {
                 return UTMControlError(code: UTMControlErrorCode.notFound, message: "Virtual machine not found.", identifier: identifier, retryable: false)
             case .ambiguous:
                 return UTMControlError(code: UTMControlErrorCode.ambiguous, message: "More than one virtual machine has this exact name.", identifier: identifier, retryable: false)
+            }
+        }
+    }
+
+    enum ControlOperationError: Error {
+        case invalidState, vmUnavailable, powerDownTimeout
+
+        func controlError(identifier: String) -> UTMControlError {
+            switch self {
+            case .invalidState:
+                return UTMControlError(code: UTMControlErrorCode.invalidState,
+                                       message: "The virtual machine is not in a valid state for this operation.",
+                                       identifier: identifier, retryable: false)
+            case .vmUnavailable:
+                return UTMControlError(code: UTMControlErrorCode.vmUnavailable,
+                                       message: "The virtual machine is not loaded.",
+                                       identifier: identifier, retryable: false)
+            case .powerDownTimeout:
+                return UTMControlError(code: UTMControlErrorCode.powerDownTimeout,
+                                       message: "Timed out waiting for the virtual machine to reach the stopped state after a graceful power-down request.",
+                                       identifier: identifier, retryable: true)
             }
         }
     }
