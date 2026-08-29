@@ -61,6 +61,15 @@ enum UTMControlRequest: Codable {
     }
 }
 
+enum UTMControlLaunchOptions {
+    static let autoStartIntentFileName = "utmctl-autostart-intent"
+}
+
+struct UTMControlLaunchIntent: Codable {
+    let processIdentifier: Int32
+    let timestamp: TimeInterval
+}
+
 struct UTMControlVM: Codable {
     let uuid: String
     let name: String
@@ -232,10 +241,20 @@ enum UTMControlErrorCode {
 enum UTMControlSocket {
     static let socketName = "control/utmctl.sock"
 
-    static var url: URL? {
+    static var applicationGroupIdentifier: String? {
         guard let task = SecTaskCreateFromSelf(nil),
-              let groups = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil) as? [String],
-              let identifier = groups.first,
+              let groups = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil) as? [String] else {
+            return nil
+        }
+        return groups.first
+    }
+
+    static var launchIntentURL: URL? {
+        url?.deletingLastPathComponent().appendingPathComponent(UTMControlLaunchOptions.autoStartIntentFileName)
+    }
+
+    static var url: URL? {
+        guard let identifier = applicationGroupIdentifier,
               var container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) else {
             return nil
         }

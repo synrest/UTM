@@ -42,8 +42,22 @@ enum UTMQuitPolicy: Int {
     private var arePowerDownCandidatesStopped = false
     private var applicationStartupTask: Task<Void, Never>?
     private var controlServer: UTMControlServer?
+    private var suppressAutoStart: Bool
     private let interactiveWindows = NSHashTable<NSWindow>.weakObjects()
     private let homeWindows = NSHashTable<NSWindow>.weakObjects()
+
+    override init() {
+        suppressAutoStart = false
+        super.init()
+        guard let intentURL = UTMControlSocket.launchIntentURL,
+              let data = try? Data(contentsOf: intentURL),
+              let intent = try? JSONDecoder().decode(UTMControlLaunchIntent.self, from: data) else {
+            return
+        }
+        try? FileManager.default.removeItem(at: intentURL)
+        suppressAutoStart = Date().timeIntervalSince1970 - intent.timestamp < 10 &&
+            (kill(intent.processIdentifier, 0) == 0 || errno == EPERM)
+    }
 
     private var shouldUseAccessoryMode: Bool {
         if #available(macOS 13, *) {
@@ -414,7 +428,11 @@ enum UTMQuitPolicy: Int {
                 return
             }
             await data.listRefresh()
-            await data.autoStartVirtualMachines()
+            if self.suppressAutoStart {
+                data.didPerformAutoStart = true
+            } else {
+                await data.autoStartVirtualMachines()
+            }
         }
         if let data, let applicationStartupTask {
             do {
@@ -430,11 +448,14 @@ enum UTMQuitPolicy: Int {
     }
 
     @objc private func workspaceDidMount(_ notification: Notification) {
+        guard !suppressAutoStart else {
+            return
+        }
         Task {
             await data?.retryPendingAutoStartVirtualMachines()
         }
     }
-    
+
     func application(_ sender: NSApplication, delegateHandlesKey key: String) -> Bool {
         switch key {
         case "scriptingVirtualMachines": return true

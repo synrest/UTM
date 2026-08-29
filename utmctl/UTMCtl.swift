@@ -361,6 +361,14 @@ private enum NativeControlStartup {
     }
 
     private static func launch(_ appURL: URL) throws {
+        guard let intentURL = UTMControlSocket.launchIntentURL else {
+            throw Error.unavailable("Unable to prepare UTM native control launch.")
+        }
+        let intent = UTMControlLaunchIntent(processIdentifier: ProcessInfo.processInfo.processIdentifier,
+                                            timestamp: Date().timeIntervalSince1970)
+        let intentData = try JSONEncoder().encode(intent)
+        try intentData.write(to: intentURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: intentURL.path)
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         configuration.hides = true
