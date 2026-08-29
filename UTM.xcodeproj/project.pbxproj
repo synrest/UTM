@@ -267,6 +267,9 @@
 		84CF5DF3288E433F00D01721 /* SwiftUIVisualEffects in Frameworks */ = {isa = PBXBuildFile; productRef = 84CF5DF2288E433F00D01721 /* SwiftUIVisualEffects */; };
 		84CF5DF5288F558400D01721 /* VMToolbarDriveMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84CF5DF4288F558400D01721 /* VMToolbarDriveMenuView.swift */; };
 		84E3A8F3293DB37E0024A740 /* UTMCtl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E3A8F2293DB37E0024A740 /* UTMCtl.swift */; };
+		F10000000000000000000001 /* UTMControlProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000003 /* UTMControlProtocol.swift */; };
+		F10000000000000000000002 /* UTMControlServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000004 /* UTMControlServer.swift */; };
+		F10000000000000000000005 /* UTMControlProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000003 /* UTMControlProtocol.swift */; };
 		84E3A8FB293DB7240024A740 /* utmctl in Embed CLI Tool */ = {isa = PBXBuildFile; fileRef = 84E3A8F0293DB37E0024A740 /* utmctl */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		84E3A900293DBC290024A740 /* ArgumentParser in Frameworks */ = {isa = PBXBuildFile; productRef = 84E3A8FF293DBC290024A740 /* ArgumentParser */; };
 		84E3A91B2946D2590024A740 /* UTMMenuBarExtraScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E3A91A2946D2590024A740 /* UTMMenuBarExtraScene.swift */; };
@@ -1844,6 +1847,8 @@
 		84E3A8EB293349370024A740 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/VMDisplayMetalViewInputAccessory.strings; sourceTree = "<group>"; };
 		84E3A8F0293DB37E0024A740 /* utmctl */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = utmctl; sourceTree = BUILT_PRODUCTS_DIR; };
 		84E3A8F2293DB37E0024A740 /* UTMCtl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UTMCtl.swift; sourceTree = "<group>"; };
+		F10000000000000000000003 /* UTMControlProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Control/UTMControlProtocol.swift; sourceTree = "<group>"; };
+		F10000000000000000000004 /* UTMControlServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UTMControlServer.swift; sourceTree = "<group>"; };
 		84E3A8F7293DB3B60024A740 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		84E3A8F8293DB42B0024A740 /* utmctl.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = utmctl.entitlements; sourceTree = "<group>"; };
 		84E3A8F9293DB4D40024A740 /* utmctl-unsigned.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "utmctl-unsigned.entitlements"; sourceTree = "<group>"; };
@@ -2783,6 +2788,7 @@
 		CE2D953B24AD4F980059923A /* macOS */ = {
 			isa = PBXGroup;
 			children = (
+				F10000000000000000000004 /* UTMControlServer.swift */,
 				CE1BD9FA24F4825C0022A468 /* Display */,
 				CEECE13B25E47D9500A2AAB8 /* AppDelegate.swift */,
 				CEB20EE9282053320033EFB5 /* DoubleClickHandler.swift */,
@@ -2914,6 +2920,7 @@
 				CE31C242225E543A00A965DD /* Configuration */,
 				CE5F1659226138AB00F3D56B /* Services */,
 				CE2D953624AD4F980059923A /* Platform */,
+				F10000000000000000000003 /* UTMControlProtocol.swift */,
 				CEBDA1DB24D8BDDA0010B5EC /* QEMUHelper */,
 				CE9D18F72265410E00355E14 /* qemu */,
 				CE63B0F02F0ED67700C59D13 /* vulkan */,
@@ -3757,6 +3764,7 @@
 			files = (
 				84E3A8F3293DB37E0024A740 /* UTMCtl.swift in Sources */,
 				CEC794BD2949663C00121A9F /* UTMScripting.swift in Sources */,
+				F10000000000000000000001 /* UTMControlProtocol.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3939,6 +3947,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F10000000000000000000002 /* UTMControlServer.swift in Sources */,
+				F10000000000000000000005 /* UTMControlProtocol.swift in Sources */,
 				CEE06B272B2FC89400A811AE /* UTMServerView.swift in Sources */,
 				CEB63A7724F4654400CAF323 /* Main.swift in Sources */,
 				84E3A91B2946D2590024A740 /* UTMMenuBarExtraScene.swift in Sources */,

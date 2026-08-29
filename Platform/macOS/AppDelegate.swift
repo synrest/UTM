@@ -41,6 +41,7 @@ enum UTMQuitPolicy: Int {
     private var isPowerDownRequestComplete = false
     private var arePowerDownCandidatesStopped = false
     private var applicationStartupTask: Task<Void, Never>?
+    private var controlServer: UTMControlServer?
     private let interactiveWindows = NSHashTable<NSWindow>.weakObjects()
     private let homeWindows = NSHashTable<NSWindow>.weakObjects()
 
@@ -414,6 +415,13 @@ enum UTMQuitPolicy: Int {
             }
             await data.listRefresh()
             await data.autoStartVirtualMachines()
+        }
+        if let data, let applicationStartupTask {
+            do {
+                controlServer = try UTMControlServer(data: data, startupTask: applicationStartupTask)
+            } catch {
+                logger.error("Failed to start native control server: \(error.localizedDescription)")
+            }
         }
     }
 

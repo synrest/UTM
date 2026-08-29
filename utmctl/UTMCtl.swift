@@ -49,6 +49,15 @@ protocol UTMAPICommand: ParsableCommand {
     func run(with application: UTMScriptingApplication) throws
 }
 
+protocol NativeUTMAPICommand: ParsableCommand {
+    var json: Bool { get }
+    func runNative() throws
+}
+
+extension NativeUTMAPICommand {
+    func run() throws { try runNative() }
+}
+
 extension UTMAPICommand {
     /// Entry point for all subcommands
     func run() throws {
@@ -139,6 +148,7 @@ extension UTMCtl {
         case virtualMachineNotFound
         case invalidIdentifier(String)
         case deviceNotFound
+        case native(code: String, message: String)
         
         var errorDescription: String? {
             switch self {
@@ -146,6 +156,7 @@ extension UTMCtl {
             case .virtualMachineNotFound: return "Virtual machine not found."
             case .invalidIdentifier(let identifier): return "Identifier '\(identifier)' is invalid."
             case .deviceNotFound: return "Device not found."
+            case .native(let code, let message): return "\(code): \(message)"
             }
         }
     }
@@ -181,17 +192,17 @@ extension UTMCtl {
 }
 
 extension UTMCtl {
-    struct List: UTMAPICommand {
+    struct List: NativeUTMAPICommand {
         static var configuration = CommandConfiguration(
             abstract: "Enumerate all registered virtual machines."
         )
         
         @OptionGroup var environment: EnvironmentOptions
+        @Flag(name: .long, help: "Output JSON.") var json = false
         
-        func run(with application: UTMScriptingApplication) throws {
-            if let list = application.virtualMachines!() as? [UTMScriptingVirtualMachine] {
-                printResponse(list)
-            }
+        func runNative() throws {
+            let response = try nativeRequest(.list)
+            try printNativeResponse(response)
         }
         
         func printResponse(_ response: [UTMScriptingVirtualMachine]) {
@@ -201,29 +212,97 @@ extension UTMCtl {
                 print("\(entry.id!()) \(status) \(entry.name!)")
             }
         }
+
+        private func printNativeResponse(_ response: UTMControlResponse) throws {
+            if json {
+                try printJSON(response)
+            } else if let vms = response.vms {
+                print("UUID                                 Status   Name")
+                for vm in vms { print("\(vm.uuid) \(vm.state.padding(toLength: 8, withPad: " ", startingAt: 0)) \(vm.name)") }
+            } else { try throwResponseError(response) }
+        }
     }
 }
 
 extension UTMCtl {
-    struct Status: UTMAPICommand {
+    struct Status: NativeUTMAPICommand {
         static var configuration = CommandConfiguration(
             abstract: "Query the status of a virtual machine."
         )
         
         @OptionGroup var environment: EnvironmentOptions
+        @Flag(name: .long, help: "Output JSON.") var json = false
         
         @OptionGroup var identifer: VMIdentifier
         
-        func run(with application: UTMScriptingApplication) throws {
-            let vm = try virtualMachine(forIdentifier: identifer, in: application)
-            printResponse(vm)
-            
+        func runNative() throws {
+            let response = try nativeRequest(.status(identifier: identifer.identifier))
+            if json { try printJSON(response) }
+            else if let vm = response.vm { print(vm.state) }
+            else { try throwResponseError(response) }
         }
         
         func printResponse(_ vm: UTMScriptingVirtualMachine) {
             print(vm.status!.asString)
         }
     }
+}
+
+private func printJSON(_ response: UTMControlResponse) throws {
+    let data = try JSONEncoder().encode(response)
+    try FileHandle.standardOutput.write(contentsOf: data)
+    print()
+}
+
+private func nativeRequest(_ request: UTMControlRequest) throws -> UTMControlResponse {
+    do {
+        let response = try UTMControlClient().request(request)
+        if let error = response.error {
+            if CommandLine.arguments.contains("--json") {
+                try printJSON(response)
+            } else {
+                FileHandle.standardError.write(Data("\(error.code): \(error.message)\n".utf8))
+            }
+            Darwin.exit(nativeExitCode(for: error.code))
+        }
+        return response
+    } catch UTMControlClient.ClientError.unavailable {
+        let message = "UTM is not running or its control socket is unavailable."
+        let response = UTMControlResponse.failure(UTMControlError(code: UTMControlErrorCode.unavailable,
+                                                                  message: message, identifier: nil, retryable: true))
+        if CommandLine.arguments.contains("--json") {
+            try printJSON(response)
+        } else {
+            FileHandle.standardError.write(Data("\(UTMControlErrorCode.unavailable): \(message)\n".utf8))
+        }
+        Darwin.exit(8)
+    } catch UTMControlClient.ClientError.protocolError {
+        let message = "UTM returned an invalid control response."
+        let response = UTMControlResponse.failure(UTMControlError(code: UTMControlErrorCode.protocolError,
+                                                                  message: message, identifier: nil, retryable: true))
+        if CommandLine.arguments.contains("--json") {
+            try printJSON(response)
+        } else {
+            FileHandle.standardError.write(Data("\(UTMControlErrorCode.protocolError): \(message)\n".utf8))
+        }
+        Darwin.exit(nativeExitCode(for: UTMControlErrorCode.protocolError))
+    } catch {
+        throw error
+    }
+}
+
+private func nativeExitCode(for code: String) -> Int32 {
+    switch code {
+    case UTMControlErrorCode.notFound: return 3
+    case UTMControlErrorCode.ambiguous: return 4
+    case UTMControlErrorCode.unavailable: return 8
+    default: return 10
+    }
+}
+
+private func throwResponseError(_ response: UTMControlResponse) throws {
+    if let error = response.error { throw UTMCtl.APIError.native(code: error.code, message: error.message) }
+    throw UTMCtl.APIError.native(code: UTMControlErrorCode.protocolError, message: "Invalid response.")
 }
 
 extension UTMCtl {
