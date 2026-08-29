@@ -186,6 +186,7 @@ final class UTMControlServer {
             case .start:
                 guard vm.state == .stopped else { throw ControlOperationError.invalidState }
                 try await data.startHeadless(vm: vm)
+                try await waitForState(vm, expected: .started, timeout: 15)
             case .stop:
                 if vm.state == .stopping {
                     try await waitForStopped(vm)
@@ -204,10 +205,12 @@ final class UTMControlServer {
                 guard vm.state == .started else { throw ControlOperationError.invalidState }
                 try await wrapped.pause()
                 vm.state = wrapped.state
+                try await waitForState(vm, expected: .paused, timeout: 15)
             case .resume:
                 guard vm.state == .paused else { throw ControlOperationError.invalidState }
                 try await wrapped.resume()
                 vm.state = wrapped.state
+                try await waitForState(vm, expected: .started, timeout: 15)
             }
             return .operation(operation.rawValue, record(vm))
         } catch let error as ControlOperationError {
@@ -226,8 +229,19 @@ final class UTMControlServer {
         }
     }
 
+    private func waitForState(_ vm: VMData, expected: UTMVirtualMachineState, timeout: TimeInterval) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while vm.state != expected {
+            guard Date() < deadline else { throw ControlOperationError.operationTimeout }
+            try await Task.sleep(nanoseconds: 100 * NSEC_PER_MSEC)
+        }
+    }
+
     private func resolve(_ identifier: String) throws -> VMData {
-        if let uuid = UUID(uuidString: identifier), let vm = data.virtualMachines.first(where: { $0.id == uuid }) {
+        if let uuid = UUID(uuidString: identifier) {
+            guard let vm = data.virtualMachines.first(where: { $0.id == uuid }) else {
+                throw ControlLookupError.notFound
+            }
             return vm
         }
         let matches = data.virtualMachines.filter { $0.detailsTitleLabel == identifier }
@@ -239,11 +253,23 @@ final class UTMControlServer {
     private func record(_ vm: VMData) -> UTMControlVM {
         let wrapped = vm.wrapped
         let backend: String
-        if wrapped is UTMQemuVirtualMachine { backend = "qemu" }
-        else if wrapped is UTMAppleVirtualMachine { backend = "apple" }
-        else { backend = "unavailable" }
+        if let wrapped {
+            backend = controlBackend(wrapped.config.backend)
+        } else if let config = try? UTMQemuConfiguration.load(from: vm.pathUrl) {
+            backend = controlBackend(config.backend)
+        } else {
+            backend = "unknown"
+        }
         return UTMControlVM(uuid: vm.id.uuidString, name: vm.detailsTitleLabel,
                             state: vm.state.controlName, backend: backend, loaded: vm.isLoaded)
+    }
+
+    private func controlBackend(_ backend: UTMBackend) -> String {
+        switch backend {
+        case .qemu: return "qemu"
+        case .apple: return "apple"
+        case .unknown: return "unknown"
+        }
     }
 
     private static func removeStaleSocket(at path: String) throws {
@@ -305,7 +331,7 @@ final class UTMControlServer {
     }
 
     enum ControlOperationError: Error {
-        case invalidState, vmUnavailable, powerDownTimeout
+        case invalidState, vmUnavailable, powerDownTimeout, operationTimeout
 
         func controlError(identifier: String) -> UTMControlError {
             switch self {
@@ -320,6 +346,10 @@ final class UTMControlServer {
             case .powerDownTimeout:
                 return UTMControlError(code: UTMControlErrorCode.powerDownTimeout,
                                        message: "Timed out waiting for the virtual machine to reach the stopped state after a graceful power-down request.",
+                                       identifier: identifier, retryable: true)
+            case .operationTimeout:
+                return UTMControlError(code: UTMControlErrorCode.operationTimeout,
+                                       message: "Timed out waiting for the virtual machine to reach the requested state.",
                                        identifier: identifier, retryable: true)
             }
         }

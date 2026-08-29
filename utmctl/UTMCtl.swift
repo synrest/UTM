@@ -424,6 +424,7 @@ private func nativeExitCode(for code: String) -> Int32 {
     case UTMControlErrorCode.ambiguous: return 4
     case UTMControlErrorCode.unavailable: return 8
     case UTMControlErrorCode.powerDownTimeout: return 11
+    case UTMControlErrorCode.operationTimeout: return 12
     default: return 10
     }
 }

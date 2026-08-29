@@ -75,9 +75,26 @@ struct UTMControlVM: Codable {
     let name: String
     let state: String
     let backend: String
-    let loaded: Bool?
+    let loaded: Bool
 
     private enum CodingKeys: String, CodingKey { case uuid, name, state, backend, loaded }
+
+    init(uuid: String, name: String, state: String, backend: String, loaded: Bool) {
+        self.uuid = uuid
+        self.name = name
+        self.state = state
+        self.backend = backend
+        self.loaded = loaded
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        uuid = try container.decode(String.self, forKey: .uuid)
+        name = try container.decode(String.self, forKey: .name)
+        state = try container.decode(String.self, forKey: .state)
+        backend = try container.decode(String.self, forKey: .backend)
+        loaded = try container.decodeIfPresent(Bool.self, forKey: .loaded) ?? true
+    }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -85,7 +102,7 @@ struct UTMControlVM: Codable {
         try container.encode(name, forKey: .name)
         try container.encode(state, forKey: .state)
         try container.encode(backend, forKey: .backend)
-        try container.encodeIfPresent(loaded, forKey: .loaded)
+        try container.encode(loaded, forKey: .loaded)
     }
 }
 
@@ -235,6 +252,7 @@ enum UTMControlErrorCode {
     static let invalidState = "INVALID_VM_STATE"
     static let vmUnavailable = "VM_UNAVAILABLE"
     static let backendFailure = "BACKEND_FAILURE"
+    static let operationTimeout = "OPERATION_TIMEOUT"
     static let powerDownTimeout = "POWER_DOWN_TIMEOUT"
 }
 
