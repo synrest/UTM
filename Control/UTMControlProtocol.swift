@@ -273,10 +273,14 @@ enum UTMControlSocket {
     }
 
     static var url: URL? {
-        guard let identifier = applicationGroupIdentifier,
-              var container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) else {
+        guard let identifier = applicationGroupIdentifier else {
             return nil
         }
+
+        guard var container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) ?? fallbackContainerURL(for: identifier) else {
+            return nil
+        }
+
         if container.lastPathComponent == "Data",
            container.deletingLastPathComponent().lastPathComponent == identifier {
             let library = container.deletingLastPathComponent()
@@ -284,12 +288,36 @@ enum UTMControlSocket {
                 .deletingLastPathComponent()
             let groupContainer = library.appendingPathComponent("Group Containers", isDirectory: true)
                 .appendingPathComponent(identifier, isDirectory: true)
+
             guard FileManager.default.fileExists(atPath: groupContainer.path) else {
                 return nil
             }
             container = groupContainer
         }
+
         return container.appendingPathComponent(socketName)
+    }
+
+    private static func fallbackContainerURL(for identifier: String) -> URL? {
+        guard identifier.range(of: "^[A-Za-z0-9][A-Za-z0-9.-]*$", options: .regularExpression) != nil,
+              let passwd = getpwuid(getuid()) else {
+            return nil
+        }
+
+        let home = String(cString: passwd.pointee.pw_dir)
+        guard home.hasPrefix("/"), !home.contains("/../"), !home.hasSuffix("/..") else {
+            return nil
+        }
+        let groupContainer = URL(fileURLWithPath: home, isDirectory: true)
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Group Containers", isDirectory: true)
+            .appendingPathComponent(identifier, isDirectory: true)
+        var info = stat()
+        guard lstat(groupContainer.path, &info) == 0,
+              info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
+            return nil
+        }
+        return groupContainer
     }
 }
 
