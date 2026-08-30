@@ -367,6 +367,9 @@ private enum NativeControlStartup {
         let intent = UTMControlLaunchIntent(processIdentifier: ProcessInfo.processInfo.processIdentifier,
                                             timestamp: Date().timeIntervalSince1970)
         let intentData = try JSONEncoder().encode(intent)
+        let intentDirectory = intentURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: intentDirectory, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: intentDirectory.path)
         try intentData.write(to: intentURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: intentURL.path)
         let configuration = NSWorkspace.OpenConfiguration()
