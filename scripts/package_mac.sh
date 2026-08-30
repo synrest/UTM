@@ -75,6 +75,8 @@ if [ "$MODE" == "unsigned" ]; then
 	cp "$BASEDIR/../QEMURenderServer/QEMURenderServer-unsigned.entitlements" "$RENDERER_ENTITLEMENTS"
 	cp "$BASEDIR/../QEMUHelper/QEMUHelper-unsigned.entitlements" "$HELPER_ENTITLEMENTS"
 	cp "$BASEDIR/../utmctl/utmctl-unsigned.entitlements" "$CLI_ENTITLEMENTS"
+	/usr/libexec/PlistBuddy -c "Set :com.apple.security.application-groups:0 ${PRODUCT_BUNDLE_PREFIX}.UTM" "$UTM_ENTITLEMENTS"
+	/usr/libexec/PlistBuddy -c "Set :com.apple.security.application-groups:0 ${PRODUCT_BUNDLE_PREFIX}.UTM" "$CLI_ENTITLEMENTS"
 else
 	cp "$BASEDIR/../Platform/macOS/macOS.entitlements" "$UTM_ENTITLEMENTS"
 	cp "$BASEDIR/../QEMULauncher/QEMULauncher.entitlements" "$LAUNCHER_ENTITLEMENTS"
